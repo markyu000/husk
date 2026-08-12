@@ -62,3 +62,7 @@
 ## 4. Issue
 
 所有issue依据模版创建，设置assignees、label、estimate、size、时间期限
+
+### 4.1 Label
+
+同PR
