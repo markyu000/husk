@@ -1,0 +1,18 @@
+name: "📝 Documents"
+description: 文档新增、修正或补充
+title: "[Docs] "
+labels: ["type/docs"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 文档描述
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+    validations:
+      required: false

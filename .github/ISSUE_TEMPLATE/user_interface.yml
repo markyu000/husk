@@ -1,0 +1,32 @@
+name: "🎨 User Interface"
+description: 界面外观、交互体验相关的调整
+title: "[UI] "
+labels: ["type/appear"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: UI 所属位置
+    validations:
+      required: true
+
+  - type: textarea
+    id: function
+    attributes:
+      label: 功能
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirement
+    attributes:
+      label: 要求
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+    validations:
+      required: false

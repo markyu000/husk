@@ -1,0 +1,18 @@
+name: "✨ Feature"
+description: 提出一个新功能想法
+title: "[Feat] "
+labels: ["type/feat"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 功能描述
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+    validations:
+      required: false

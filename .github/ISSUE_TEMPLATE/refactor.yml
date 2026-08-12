@@ -1,0 +1,32 @@
+name: "♻️ Refactor"
+description: 代码重构、结构优化
+title: "[Refactor] "
+labels: ["type/refact"]
+body:
+  - type: textarea
+    id: target
+    attributes:
+      label: 操作部分
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 实现方式
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+    validations:
+      required: false
