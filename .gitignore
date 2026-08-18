@@ -1,3 +1,8 @@
 xcuserdata/
 *.xcuserstate
 .DS_Store
+
+# OpenWolf / Claude local tooling
+CLAUDE.md
+.wolf/
+.claude/
