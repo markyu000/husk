@@ -1,7 +1,7 @@
 name: "🎨 User Interface"
 description: 界面外观、交互体验相关的调整
 title: "[UI] "
-labels: ["type/appear"]
+labels: ["type/appear", "scope/ui"]
 body:
   - type: input
     id: location

@@ -3,6 +3,21 @@ description: 记录一个需要修复的 bug
 title: "[Fix] "
 labels: ["type/fix"]
 body:
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 所属范围
+      description: 对应 scope/* label，提交后请维护者手动补加
+      options:
+        - learning-engine
+        - reviewing-engine
+        - ui
+        - word-card
+        - route-rule-table
+        - 其他
+    validations:
+      required: false
+
   - type: textarea
     id: description
     attributes:
