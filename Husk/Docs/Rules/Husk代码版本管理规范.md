@@ -76,7 +76,7 @@ Label 按 `/` 前缀分组，同一前缀组内统一一个颜色，用于区分
 
 ## 4. Issue
 
-所有issue依据模版创建，设置assignees、label、milestone；并在 GitHub Project「Husk Feature Releasing Board」中设置 Priority、Size、Estimate（不需要设置时间期限）
+所有issue依据模版创建，设置assignees、label、milestone；并在 GitHub Project「Husk Feature Releasing Board」中设置 Priority、Size、Estimate、Iteration（不需要设置 Start date/Target date 等硬性截止日期）
 
 ### 4.1 Label
 
@@ -95,8 +95,13 @@ Milestone 按实现阶段划分（依赖顺序自上而下）：
 
 ### 4.3 Project 字段
 
-| 字段       | 说明                                       |
-| :--------- | :----------------------------------------- |
-| `Priority` | `P0`/`P1`/`P2`，越小越优先                  |
-| `Size`     | `XS`/`S`/`M`/`L`/`XL`，工作量估算档位        |
-| `Estimate` | 故事点（数字），细粒度工作量估算              |
+| 字段        | 说明                                                                     |
+| :---------- | :----------------------------------------------------------------------- |
+| `Priority`  | `P0`/`P1`/`P2`，越小越优先                                                |
+| `Size`      | `XS`/`S`/`M`/`L`/`XL`，工作量估算档位                                     |
+| `Estimate`  | 故事点（数字），细粒度工作量估算                                          |
+| `Iteration` | 2 周一期（周一起始），用于安排某个 Milestone 阶段内的执行节奏，非硬性截止日期 |
+| `Start date` | 该 issue 预计开工日（必须按 issue 分别填写，不能整期 Iteration 共用一个日期） |
+| `Target date` | 该 issue 预计完成日（必须按 issue 分别填写；同一 Iteration 内的 issue 按依赖错开，不要写成同一天收口） |
+
+`Milestone` 负责按阶段划分依赖顺序（谁先谁后），`Iteration` 负责在当前阶段内安排"这两周做哪些 issue"，`Start date`/`Target date` 负责把 Iteration 内的执行窗口拆到每一张 issue。三者互补，不能用 Iteration 代替单张 issue 的起止日期。
