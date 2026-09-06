@@ -50,21 +50,3 @@ extension Card {
         originQueue == nil
     }
 }
-
-enum QueueKind: Int, Codable {
-    case newCards = 0
-    case relearn = 1
-    case review = 2
-    case fullRelearn = 3
-}
-
-enum CardType: Int, Codable, CaseIterable {
-    case word = 0
-    case phrase = 1
-}
-
-enum CardSource: Int, Codable {
-    case wordbook = 0
-    case manual = 1
-    case quickCapture = 2
-}
