@@ -2,7 +2,7 @@
 
 > 版本：v4.7 · 日期：2026-08-24
 > 配套设计文档：husk-word-learning-design-v2.md（v1.1，产品逻辑见该文档）
-> 依赖：husk-architecture-code.md（v4.6）—— `Card`/`Step`/`LearningProgress`/`ReviewSession`/`LearningRouteRule`/`stepWithFollowUp`/`ReviewRouteTarget.stepWithFollowUp`/`Unit.masteredStabilityThreshold`/`Unit.desiredRetention`/`ActionResult`/`ListeningSelfCheck`/`StepAction`/`EngineJudge`/`FSRSEngine` 等协议定义
+> 依赖：husk-architecture-code.md（v4.8）—— `Card`/`Step`/`LearningProgress`/`ReviewSession`/`LearningRouteRule`/`stepWithFollowUp`/`ReviewRouteTarget.stepWithFollowUp`/`Unit.masteredStabilityThreshold`/`Unit.desiredRetention`/`ActionResult`/`ListeningSelfCheck`/`StepAction`/`EngineJudge`/`FSRSEngine` 等协议定义
 > 本文档粒度：接口签名 + 关键算法伪代码，不是可直接编译的完整实现。
 >
 > **v4.7 变更**（跟进架构代码文档 v4.6：`FSRSEngine.initialize`/`.update` 新增 `desiredRetention` 参数，不改变任何产品逻辑）：

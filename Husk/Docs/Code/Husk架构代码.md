@@ -1,9 +1,16 @@
 # Husk 记忆架构 · 代码文档
 
-> 版本：v4.6 · 日期：2026-08-24
+> 版本：v4.8 · 日期：2026-08-29
 > 配套设计文档：husk-architecture-design.md（决策理由见该文档，尤其第九、十节）
 > 本文档只含接口/协议/类定义，具体某个 CardType 的图内容见各类型自己的代码文档
 > 本文档粒度：接口签名 + 关键算法伪代码，不是可直接编译的完整实现。留空/简化的地方会明确标注。
+>
+> **v4.8 变更**（desiredRetention 相关的一轮一致性修正与命名澄清，均不改变已确定的产品行为，`forgetRate` 曲线统一除外——这一点是本次唯一的行为变化，理由见下）：
+> 1. **`forgetRate` 从 decay=-1 的旧曲线统一为 FSRS-5 的 decay=-0.5 曲线**（二）：此前 `forgetRate` 与 `nextInterval` 用了两条不同的遗忘曲线（分别是 `(1+t/9S)^-1` 和 FSRS-5 的 `(1+F·t/S)^-0.5`），只在设计早期占位，本次正式统一成同一条曲线的两个方向（`nextInterval` 是反解，`forgetRate` 是正算），避免 retrievability 计算和调度计算基于不同假设。`factor`/`decay` 提升为 `FSRSEngine` 的静态常量供两处共享。
+> 2. **`Unit.masteredStabilityThreshold` 公式改为与 `nextInterval` 同源反解**（四）：原公式用的正是上面被替换掉的旧曲线，与实际调度用的曲线不一致，R 偏离默认值 0.90 时阈值有 4%–7% 偏差。现在直接对 `nextInterval` 的公式解 stability，两者恒等自洽。
+> 3. **`FSRSEngine.nextInterval` 新增 `desiredRetention` 越界防护**（二）：非法值（0、负数、读盘异常）会使 `pow` 产生 `inf`，进而在 `Int(round(...))` 处 trap 崩溃。加入 clamp 到 `[0.70, 0.99]` 的防线，UI 滑块限制的 80%–97% 之外的异常值不再能击穿到崩溃。
+> 4. **`Card.isFullyLearned` 更名为 `Card.isGraduated`**（一）：与 `WordCard.isCompletelyLearned(in:)`（单词卡代码文档）语义完全不同（前者="学习流程已走完、进入长期复习轮转"，后者="stability 已达阈值、一年内不用再复习"）但命名几乎一样，容易混淆误用，予以更名。`isInInbox` 等其余 `Card` extension 计算属性不受影响。
+> 5. **新增"到期卡定时入队"机制**（四、七）：此前 `originQueue = nil` 的卡只有 `fsrs.dueDate`，没有任何机制在到期后把它放回 `Unit.reviewQueue`——`requeueToReview` 在全文档中从未被调用。现在明确由一个后台定时任务负责这一步，见七新增小节。
 >
 > **v4.6 变更**（补全此前两处"与 v1.0 相同/不重复列出"但从未在正文出现过的空白，均为文档遗漏，不改变既有行为；顺带把 v4.3 引入的"desiredRetention 按 Unit 配置"同步进 FSRSEngine 的调用签名，这属于本次补全过程中发现的真实缺口，非单纯格式修订）：
 > 1. **`FSRSState`/`FSRSCardState`/`FSRSParameters`/`FSRSEngine` 补全完整定义**（二）：v1.0 起历次改版只写"与 v1.0 相同，不重复列出"，从未真正出现在文档正文里。
@@ -59,8 +66,11 @@ protocol Card: AnyObject, Identifiable {
     // FSRS 调度状态，长期持久化，不受本次重构影响
     var fsrs: FSRSState { get set }
 
-    // 这张卡是否已完全学完，进入长期复习轮转
-    var isFullyLearned: Bool { get }
+    // v4.8 更名（原 isFullyLearned）：这张卡是否已经走完学习流程、进入长期复习轮转。
+    // 注意与 WordCard.isCompletelyLearned(in:)（单词卡代码文档）区分——那是完全不同的
+    // 概念："stability 已经高到一年内不用再复习"，只在复习了很多次之后才会变 true。
+    // 这里的 isGraduated 只是"脱离学习引擎的槽位传送带"，学完那一刻就是 true。
+    var isGraduated: Bool { get }
 
     // 复习时展示的线索
     func reviewPrompt() -> ReviewPrompt
@@ -97,7 +107,7 @@ extension Card {
         source == .quickCapture && !addedToQueue
     }
 
-    var isFullyLearned: Bool {
+    var isGraduated: Bool {
         originQueue == nil
     }
 }
@@ -188,6 +198,19 @@ struct FSRSParameters {
 struct FSRSEngine {
     static let defaultParams = FSRSParameters()
 
+    /// FSRS-5 遗忘曲线的形状参数，`nextInterval`（正向定义 stability）与
+    /// `forgetRate`（反向查询 retrievability）共享同一套常量，保证两处基于
+    /// 同一条曲线——v4.8 之前 `forgetRate` 曾误用 decay=-1 的旧曲线，
+    /// 与 `nextInterval` 的 decay=-0.5 不一致，已统一。
+    ///
+    /// `stabilityAnchorRetention = 0.9` 是 stability 的**定义锚点**
+    /// （"stability = 可提取性衰减到 90% 所需的天数"），与 `Unit.desiredRetention`
+    /// 无关，任何情况下都不得替换成 desiredRetention——即使 v4.3 之后 retention
+    /// 已经改为按 Unit 配置，这个 0.9 仍然是固定的数学常量。
+    private static let decay = -0.5
+    private static let stabilityAnchorRetention = 0.9
+    private static let factor = pow(stabilityAnchorRetention, 1.0 / decay) - 1
+
     /// - Parameter desiredRetention: 调用方必须传入该卡所属 Unit 的 desiredRetention（四），
     ///   v4.3 起这不再有全局默认值——每个 Unit 创建时通过滑块各自设置（80%–97%，默认 90%）。
     /// 卡片第一次被评分时调用（新卡入库）。此时没有历史 stability/difficulty 可参考，
@@ -214,7 +237,8 @@ struct FSRSEngine {
         // 距离上次复习过了多少天——retrievability 和"遗忘"都是相对这个间隔算的。
         let elapsed = elapsedDays(from: state.lastReview, to: now)
         // retrievability：在本次复习发生的这一刻，用户还记得这张卡的概率有多大（0~1）。
-        // 间隔越长、原先的 stability 越低，这个值就越小。
+        // 与 nextInterval 共用同一条 FSRS-5 曲线（decay/factor，见上），间隔越长、
+        // 原先的 stability 越低，这个值就越小。
         let retrievability = forgetRate(elapsed: elapsed, stability: state.stability)
 
         state.elapsedDays = elapsed
@@ -245,18 +269,26 @@ struct FSRSEngine {
 
     /// 反推：要让"到期那天"的 retrievability 刚好等于 desiredRetention，间隔该排多少天。
     /// stability 越大、desiredRetention 越低，算出来的间隔越长。
+    ///
+    /// v4.8：`desiredRetention` 加入越界 clamp。UI 滑块限制在 80%–97%，
+    /// 但这道防线只护住创建流程；读盘异常或未来别的写入路径仍可能带来非法值
+    /// （0、负数、>1），会让 `pow` 产生 `inf`，`Int(round(inf))` 在 Swift 里是
+    /// trap 而非饱和截断，会直接崩溃。这里 clamp 到比产品滑块范围更宽松的
+    /// [0.70, 0.99]，只为兜底极端脏数据，不代表放宽产品允许的选择范围。
     private static func nextInterval(stability: Double, desiredRetention: Double) -> Int {
-        let decay = -0.5
-        let factor = pow(0.9, 1.0 / decay) - 1
-        let interval = stability * (pow(desiredRetention, 1.0 / decay) - 1) / factor
+        let clampedRetention = min(0.99, max(0.70, desiredRetention))
+        let interval = stability * (pow(clampedRetention, 1.0 / decay) - 1) / factor
         // 至少间隔 1 天，最多不超过 FSRSParameters.maximumInterval（默认 100 年），避免算出离谱的值。
         return max(1, min(defaultParams.maximumInterval, Int(round(interval))))
     }
 
     /// 遗忘曲线：给定"已经过去多久"和"当前 stability"，估计这一刻还记得的概率。
     /// elapsed 为 0 时结果为 1（刚复习完必然记得）；elapsed 相对 stability 越大，结果越接近 0。
+    ///
+    /// v4.8：改为与 `nextInterval` 同一条 FSRS-5 曲线（此前误用 decay=-1 的
+    /// 旧曲线 `(1+t/9S)^-1`，与调度实际使用的曲线不一致，已统一）。
     private static func forgetRate(elapsed: Int, stability: Double) -> Double {
-        return pow(1 + Double(elapsed) / (9 * stability), -1)
+        return pow(1 + factor * Double(elapsed) / stability, decay)
     }
 
     // initDifficulty / nextDifficulty / recallStability / forgetStability：
@@ -385,30 +417,45 @@ final class Unit {
         card.originQueue = nil
     }
 
+    /// v4.8 补充调用方说明：此前全文档没有任何地方调用这个方法——
+    /// 一张卡学完学习流程后 originQueue 变 nil，但从未被真正放回过
+    /// reviewQueue。v4.8 起明确由后台定时任务 `DueCardScheduler`（七、7.x）
+    /// 负责按 fsrs.dueDate 扫描并调用这个方法，不再是一个孤立的、
+    /// 未被使用的工具方法。
     func requeueToReview(_ card: any Card) {
         removeFromReview(card)
         reviewQueue.append(card)
         card.originQueue = .review
     }
 
-    /// v4.3 新增：某张卡在这个 Unit 的 desiredRetention 下，stability 达到多少
-    /// 就意味着下一次复习间隔已经自然拉长到约一年（365 天）以后——统一以
-    /// "间隔 ≥ 365 天"作为跨 Unit 可比的"学完不再复习"判定标准（见架构设计
-    /// 文档十）。retention 越高，需要越高的 stability 才能撑出同样长的间隔，
-    /// 所以这个阈值是随 desiredRetention 变化的，不是一个固定天数。
+    /// v4.3 新增，v4.8 修正公式：某张卡在这个 Unit 的 desiredRetention 下，
+    /// stability 达到多少就意味着下一次复习间隔已经自然拉长到约一年（365 天）
+    /// 以后——统一以"间隔 ≥ 365 天"作为跨 Unit 可比的"学完不再复习"判定标准
+    /// （见架构设计文档十）。retention 越高，需要越高的 stability 才能撑出
+    /// 同样长的间隔，所以这个阈值是随 desiredRetention 变化的，不是一个固定天数。
     ///
-    /// 公式来自 FSRS 的 interval-stability 关系反推：
-    ///   interval = stability × 9 × (1/retention - 1)
-    /// 固定 interval = 365，解出 stability：
-    ///   stability = 365 / (9 × (1/retention - 1))
+    /// **v4.8 修正**：原公式用的是 `interval = stability × 9 × (1/R - 1)`
+    /// （decay=-1 的旧曲线），与 `FSRSEngine.nextInterval` 实际调度用的
+    /// decay=-0.5 曲线不一致，R 偏离默认值 0.90 时阈值有 4%–7% 的偏差。
+    /// 现在直接对 `nextInterval` 的公式反解 stability，两者恒等自洽：
+    ///   nextInterval:  interval = stability × (R^(1/decay) - 1) / factor
+    ///   固定 interval = 365，解出 stability：
+    ///   stability = 365 × factor / (R^(1/decay) - 1)
+    /// 其中 factor、decay 与 `FSRSEngine.nextInterval` 内部使用的完全相同
+    /// （FSRS-5 曲线，decay=-0.5，factor 由 stability 定义锚点 0.9 算出）。
+    /// R = 0.90 时代入得 365，与旧公式在默认值处的结果一致，偏离处不再有偏差。
     ///
     /// 这是纯计算属性，不持久化、不缓存——`fsrs.stability` 随复习不断变化，
     /// 每次需要判定时直接现算即可，不存在数据不同步的问题。
     var masteredStabilityThreshold: Double {
-        365.0 / (9.0 * (1.0 / desiredRetention - 1.0))
+        let decay = -0.5
+        let factor = pow(0.9, 1.0 / decay) - 1
+        return 365.0 * factor / (pow(desiredRetention, 1.0 / decay) - 1)
     }
 }
 ```
+
+**待编码阶段确认**：`masteredStabilityThreshold` 里的 `decay`/`factor` 与 `FSRSEngine.nextInterval` 内部的同名常量此刻是两份独立字面量，数值相同但没有共享定义——编码阶段应该让 `Unit` 通过某种方式复用 `FSRSEngine` 里的常量（比如把 `factor`/`decay` 从 `private` 提升为 `internal static let`），避免以后任何一处改动 FSRS 曲线参数时忘记同步另一处，重新制造本次修正的同一类不一致。已记入十四节遗留清单。
 
 **v4.0 变化**：`Unit` 不再持有 `reviewEngineState: EngineState`——原来的 `EngineState`（含 `currentCardID`/`currentStepID`/`typeContext`）被 `ReviewSession`（三、3.2）取代，复习引擎的运行时状态现在跟着具体的卡（`ReviewSession` 按 `cardID` 索引），不再是挂在 `Unit` 上的单一一份状态。这个变化的动机：原来的 `EngineState` 隐含假设"引擎同一时刻只服务一张卡"，这个假设本身没错，但把状态存在 `Unit` 上、而不是跟着卡片走，会让"卡片自己的临时状态"和"引擎当前在忙什么"这两个概念纠缠在一起，拆开后职责更清楚。
 
@@ -1096,6 +1143,47 @@ final class ReviewEngine {
 
 **v4.0 变化**：`ReviewEngine` 不再持有 `stateKeyPath: ReferenceWritableKeyPath<Unit, EngineState>`——运行时状态现在是方法内的局部变量 `session: ReviewSession`，而不是挂在 `Unit` 上的一份持久化状态。这带来一个需要在编码阶段确认的取舍：**如果复习会话在中途被中断（切后台、关App），局部变量 `session` 会丢失**，之前 v1.0-v3.0 的 `EngineState` 是持久化的，能在中断后恢复。v4.0 的 `ReviewSession` 虽然类型定义上标了 `Codable`（三、3.2），但上面这段 `run` 方法的示例代码并没有在每次循环时把它写盘、也没有在方法开头尝试恢复一个已存在的 session——这是本文档遗留的一个需要修正的实现细节，见十一。
 
+### 7.x 到期卡定时入队（v4.8 新增）
+
+**问题**：一张卡学完学习流程后 `card.originQueue = nil`（一），从此只剩 `fsrs.dueDate` 记着"什么时候该复习"，不再挂在任何队列上。`Unit.requeueToReview`（四）负责把卡放回 `reviewQueue`，但此前全文档没有任何地方调用它——`fsrs.dueDate` 到了之后，没有机制真正把卡放进复习队列，`Unit.reviewQueue`/`reviewCount` 会一直卡在旧数字，单词学习设计文档 6.4 要求的"今日新到期的 FSRS 词进入今日复习队列"没有落点。
+
+**方案**：由一个**后台定时任务**负责这一步，不放在引擎的调用路径里（引擎只在用户主动进入学习/复习界面时才运行，不适合承担"随时间推移触发"这种职责）。
+
+```swift
+/// v4.8 新增。职责单一：扫描所有 Unit 里"已毕业但到期"的卡，
+/// 搬进对应 Unit 的 reviewQueue。不做任何 FSRS 计算、不碰 originQueue==nil
+/// 之外的卡——学习流程内的卡（.newCards/.fullRelearn）完全不归这个任务管。
+enum DueCardScheduler {
+    /// 触发时机：编码阶段确认，候选方案包括 App 进入前台时跑一次、
+    /// 或注册一个后台任务（BGTaskScheduler）在系统允许的时机跑。
+    /// 两者不互斥，可以都加，谁先触发都行——这个任务是幂等的，
+    /// 重复调用不会导致重复入队（见下方 guard）。
+    static func run(units: [Unit], now: Date = .now) {
+        for unit in units {
+            for card in fetchGraduatedCards(unitID: unit.id) {
+                guard card.isGraduated else { continue }  // 双重确认，防御性检查
+                guard let due = card.fsrs.dueDate, due <= now else { continue }
+                unit.requeueToReview(card)
+            }
+        }
+    }
+
+    /// 查询"这个 Unit 下 originQueue == nil 的卡"，具体实现依赖持久化方案
+    /// （SwiftData 的话大概率是一条 Predicate 查询），此处留空。
+    /// 注意：不能查询 unit.reviewQueue ∪ unit.learningSlots 之外的全集再过滤，
+    /// 那意味着要把所有卡都载入内存；应该直接按 originQueue == nil 查询。
+    private static func fetchGraduatedCards(unitID: UUID) -> [any Card] {
+        fatalError("依赖具体持久化实现查询，此处留空")
+    }
+}
+```
+
+**幂等性**：`requeueToReview` 内部先 `removeFromReview` 再 `append`（四），所以同一张卡被重复排查到也不会在 `reviewQueue` 里出现两次，`DueCardScheduler.run` 可以被安全地多次调用（比如用户短时间内多次打开 App），不需要额外加锁或去重逻辑。
+
+**与复习会话的边界**：这个任务只负责"入队"，不负责"出队"。卡片被复习完之后从 `reviewQueue` 移除、`fsrs` 更新出新的 `dueDate`，这部分是 `ReviewEngine.run`（本节前文）的职责，两者不重叠。
+
+**待编码阶段确认**：具体用 `BGAppRefreshTask` 还是简单的"每次 App 进入前台时同步跑一次"，取决于对"卡到期后多久必须出现在复习队列里"的产品要求有多严格——如果用户只在主动打开 Unit 复习页时才关心这个数字，进入前台时跑一次已经够用，不需要引入后台任务调度的复杂度。已记入十四节遗留清单。
+
 ---
 
 ## 八、完整重学：从复习流程移交给学习引擎
@@ -1239,6 +1327,9 @@ func runLearningSession(unit: Unit, factory: any LearningStepFactory, settings: 
 4. **`LearningEngine.step()`/`ReviewEngine.run()` 的调用节奏**：UI 层自行决定何时调用。**遗留一个缺口**：十三节给出了 `runLearningSession` 作为 `LearningEngine.step` 的调用方示意，但 `ReviewEngine.run` 目前没有对应的 `runReviewSession` 级别示意代码——本次给 `run` 补上 `settings` 参数后，这个缺失的调用方示意就成了唯一一处"`settings` 从哪里传进来"没有落地的地方。编码阶段需要照着 `runLearningSession` 的样子补一份 `runReviewSession`（或等价的调用方逻辑），确保 `settings` 有真实来源，而不是让 `run` 的 `settings` 参数变成一个没人真正传值的签名。
 5. **`AppSettings.defaultDailyLearningGoal` 的具体默认数值**：v4.2 只定义了字段存在，没有规定默认值该是多少（比如 10 或其他），需要结合实际学习节奏测试后确定，属于产品参数调优而非架构决策。
 6. **六、6.3 的 `process` 方法与七、`ReviewEngine.run` 里调用 `FSRSEngine.initialize`/`.update` 的地方，需要补上 `desiredRetention` 参数**：v4.6 给这两个方法的签名加上了 `desiredRetention: Double`（二），但本文档六、七两节示例代码里实际的调用点还是旧签名，需要编码阶段同步改成"先由 `card.unitID` 查到所属 `Unit`，取其 `desiredRetention` 再传入"。
+7. **`Unit.masteredStabilityThreshold`（四）与 `FSRSEngine.nextInterval`（二）里的 `factor`/`decay` 是两份独立字面量**：v4.8 已经让两处公式同源（都基于同一条 FSRS-5 曲线反解），但常量本身还没有共享定义——编码阶段应该把 `factor`/`decay` 从 `FSRSEngine` 的 `private` 提升为可被 `Unit` 访问的可见性（如 `internal static let`），让 `masteredStabilityThreshold` 直接引用，而不是各自维护一份数值相同的字面量，避免未来任何一次曲线参数调整时忘记同步另一处。
+8. **`DueCardScheduler`（七、7.x）的触发时机与持久化查询**：`fetchGraduatedCards` 依赖具体持久化方案实现按 `originQueue == nil` 的查询，本文档留空；触发时机是"App 进入前台时跑一次"还是引入 `BGAppRefreshTask` 之类的后台任务，取决于对到期延迟的产品要求，需要编码阶段结合实际测试确定。
+9. **`FSRSEngine.nextInterval` 的 `desiredRetention` clamp 范围 `[0.70, 0.99]`（二）是防御性兜底值，不是产品允许范围**：产品层面仍然只允许 Unit 创建时在 `[0.80, 0.97]` 之间选择（四）。编码阶段如果决定在 `Unit.init` 或解码入口也加一道断言/clamp（比如防止未来某处绕过滑块直接构造 `Unit` 传入非法值），要确认两处范围不要写反或用混，`nextInterval` 那道更宽松的范围只是最后一道防止崩溃的防线。
 
 **v4.0 遗留、已在 v4.1 解决的问题**（记录于此，避免以后误查旧版本文档产生困惑）：
 - ~~`Step.action` 如何表达"复合交互"~~ → 改为不扩展 `StepAction`，用泛型 `RouteTarget<FinishedPayload>.stepWithFollowUp` 表达（见五、5.5）
