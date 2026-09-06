@@ -1,9 +1,13 @@
 # Husk 单词学习 · 代码文档
 
-> 版本：v4.6 · 日期：2026-08-18
+> 版本：v4.7 · 日期：2026-08-24
 > 配套设计文档：husk-word-learning-design-v2.md（v1.1，产品逻辑见该文档）
-> 依赖：husk-architecture-code.md（v4.5）—— `Card`/`Step`/`LearningProgress`/`ReviewSession`/`LearningRouteRule`/`stepWithFollowUp`/`ReviewRouteTarget.stepWithFollowUp`/`Unit.masteredStabilityThreshold`/`ActionResult`/`ListeningSelfCheck`/`StepAction`/`EngineJudge` 等协议定义
+> 依赖：husk-architecture-code.md（v4.6）—— `Card`/`Step`/`LearningProgress`/`ReviewSession`/`LearningRouteRule`/`stepWithFollowUp`/`ReviewRouteTarget.stepWithFollowUp`/`Unit.masteredStabilityThreshold`/`Unit.desiredRetention`/`ActionResult`/`ListeningSelfCheck`/`StepAction`/`EngineJudge`/`FSRSEngine` 等协议定义
 > 本文档粒度：接口签名 + 关键算法伪代码，不是可直接编译的完整实现。
+>
+> **v4.7 变更**（跟进架构代码文档 v4.6：`FSRSEngine.initialize`/`.update` 新增 `desiredRetention` 参数，不改变任何产品逻辑）：
+> 1. **四、4.5 `transitionToFullRelearn` 里的 `FSRSEngine.update` 调用**：补上 `desiredRetention: unit.desiredRetention`。
+> 2. **五、`handleMarkAsFamiliar` 里的 `FSRSEngine.initialize` 调用**：补上 `desiredRetention: unit.desiredRetention`。
 >
 > **v4.6 变更**（正式编码前的最后一轮查缺补漏，不改变任何已有产品逻辑）：
 > 1. **`LearningPath`/`TimedAssessment`/`DefinitionTestMode` 补上正式声明**（二、2.3）：自 v1.0 起就在使用，历次改版只写"定义不变"，从未出现在当前版本文档正文里。
@@ -850,7 +854,8 @@ func transitionToFullRelearn(card: WordCard, unit: Unit, session: ReviewSession)
         typeContext: WordLearningTypeContext(learningPath: .vagueMini, step1CorrectOnFirstTry: nil)
     )
     // saveLearningProgress(progress) —— 实际写入由架构层持久化接口完成
-    FSRSEngine.update(&card.fsrs, rating: .again)
+    // v4.6：update 新增 desiredRetention 参数（架构代码文档二），从卡片所属 unit 读取
+    FSRSEngine.update(&card.fsrs, rating: .again, desiredRetention: unit.desiredRetention)
 }
 
 extension WordCard {
@@ -890,7 +895,8 @@ func handleMarkAsFamiliar(card: WordCard, unit: Unit) {
         return
     }
     unit.learningSlots.removeCompletedCard(card.id, from: progress.currentStepID)
-    FSRSEngine.initialize(&card.fsrs, rating: .easy)
+    // v4.6：initialize 新增 desiredRetention 参数（架构代码文档二），从卡片所属 unit 读取
+    FSRSEngine.initialize(&card.fsrs, rating: .easy, desiredRetention: unit.desiredRetention)
     card.originQueue = nil
     clearLearningProgress(cardID: card.id)   // 卡片已学完，A部分的临时状态存储同步清理
 }

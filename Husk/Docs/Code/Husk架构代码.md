@@ -1,9 +1,14 @@
 # Husk 记忆架构 · 代码文档
 
-> 版本：v4.5 · 日期：2026-08-18
+> 版本：v4.6 · 日期：2026-08-24
 > 配套设计文档：husk-architecture-design.md（决策理由见该文档，尤其第九、十节）
 > 本文档只含接口/协议/类定义，具体某个 CardType 的图内容见各类型自己的代码文档
 > 本文档粒度：接口签名 + 关键算法伪代码，不是可直接编译的完整实现。留空/简化的地方会明确标注。
+>
+> **v4.6 变更**（补全此前两处"与 v1.0 相同/不重复列出"但从未在正文出现过的空白，均为文档遗漏，不改变既有行为；顺带把 v4.3 引入的"desiredRetention 按 Unit 配置"同步进 FSRSEngine 的调用签名，这属于本次补全过程中发现的真实缺口，非单纯格式修订）：
+> 1. **`FSRSState`/`FSRSCardState`/`FSRSParameters`/`FSRSEngine` 补全完整定义**（二）：v1.0 起历次改版只写"与 v1.0 相同，不重复列出"，从未真正出现在文档正文里。
+> 2. **`FSRSEngine.initialize`/`.update` 新增 `desiredRetention` 参数**（二）：v4.3 已经把 desired retention 从全局固定值改成按 Unit 配置，但当时只改了 `Unit` 侧（新增字段与计算属性），没有同步更新 `FSRSEngine` 的调用签名——本次补全 v1.0 原文时发现这处不一致，一并修正。六、七两节实际调用处尚未跟进，已记入十四节遗留清单。
+> 3. **随手记捕获（九）补全完整定义**：此前这一节只有标题和"与 v1.0 相同"六个字，没有正文，属于文档遗漏，这里补上 v1.0 原文（`QuickCaptureFlow` 三态判断）。
 >
 > **v4.5 变更**（正式编码前的最后一轮查缺补漏：补全此前只被引用、从未正式声明的基础类型，不改变任何既有行为）：
 > 1. **`StepID`/`PromptContent`/`ChecklistItem` 补上正式声明**（六、6.2）：自 v1.0 起就在使用，历次改版只写"与 v1.0 相同不重复列出"，从未出现在当前版本文档正文里。
@@ -122,9 +127,29 @@ enum CardSource: Int, Codable {
 
 ## 二、FSRS 通用状态
 
-`FSRSState`、`FSRSCardState`、`FSRSParameters`、`FSRSEngine`（`initialize`/`update` 等方法）与 v1.0 相同，不重复列出。
+> **本节补全说明**：`FSRSState`/`FSRSCardState`/`FSRSParameters`/`FSRSEngine` 自 v1.0 起历次改版都写"与 v1.0 相同，不重复列出"，从未在当前版本文档正文里出现过完整定义——这是文档遗漏，这里补全，不改变任何既有行为。同时借这次补全，把 v4.3（四、`Unit.desiredRetention`）引入的"目标保留率改为按 Unit 配置"这个变化，同步落实到 `FSRSEngine` 的调用方式上：v1.0 原文里 `requestRetention` 是 `FSRSParameters` 里的固定字段（默认 0.9），v4.3 之后这个值必须来自具体某个 `Unit`，不能再是写死的全局常量，下面的签名已按此调整。
 
 ```swift
+enum FSRSCardState: Int, Codable {
+    case new = 0
+    case learning = 1
+    case review = 2
+    case relearning = 3
+}
+
+struct FSRSState: Codable {
+    var stability: Double = 0
+    var difficulty: Double = 0
+    var elapsedDays: Int = 0
+    var scheduledDays: Int = 0
+    var reps: Int = 0
+    var lapses: Int = 0
+    var dueDate: Date?
+    var lastReview: Date?
+    var state: FSRSCardState = .new
+    var dueDateOverridden: Bool = false   // 特殊规则触发的调度覆盖标记（如单词型"想到了"次日强制复习）
+}
+
 enum FSRSRating: Int, Codable {
     case again = 1
     case hard = 2
@@ -145,9 +170,82 @@ protocol FSRSRatingConvertible {
 extension FSRSRating: FSRSRatingConvertible {
     var fsrsRating: FSRSRating { self }
 }
+
+/// 论文默认 19 个权重与最大间隔，这两项是全局常量，不随 Unit 变化。
+/// requestRetention 不再放在这个类型里——v4.3 起改为每个 Unit 各自的 desiredRetention（四），
+/// 调用 nextInterval 时必须显式传入，不能再依赖某个默认值。
+struct FSRSParameters {
+    var weights: [Double] = [
+        0.40255, 1.18385, 3.173, 15.69105,
+        7.1949, 0.5345, 1.4604, 0.0046,
+        1.54575, 0.1192, 1.01925, 1.9395,
+        0.11, 0.29605, 2.2698, 0.2315,
+        2.9898, 0.51655, 0.6621
+    ]
+    var maximumInterval: Int = 36500
+}
+
+struct FSRSEngine {
+    static let defaultParams = FSRSParameters()
+
+    /// - Parameter desiredRetention: 调用方必须传入该卡所属 Unit 的 desiredRetention（四），
+    ///   v4.3 起这不再有全局默认值——每个 Unit 创建时通过滑块各自设置（80%–97%，默认 90%）。
+    static func initialize(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double) {
+        let w = defaultParams.weights
+        state.stability = w[rating.rawValue - 1]
+        state.difficulty = initDifficulty(rating: rating)
+        state.reps = 1
+        state.lapses = 0
+        state.lastReview = .now
+        state.state = .review
+        state.scheduledDays = nextInterval(stability: state.stability, desiredRetention: desiredRetention)
+        state.dueDate = Calendar.current.date(byAdding: .day, value: state.scheduledDays, to: .now)
+    }
+
+    static func update(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double) {
+        let now = Date()
+        let elapsed = elapsedDays(from: state.lastReview, to: now)
+        let retrievability = forgetRate(elapsed: elapsed, stability: state.stability)
+
+        state.elapsedDays = elapsed
+        state.difficulty = nextDifficulty(d: state.difficulty, rating: rating)
+
+        if rating == .again {
+            state.stability = forgetStability(d: state.difficulty, s: state.stability, r: retrievability)
+            state.lapses += 1
+            state.state = .relearning
+        } else {
+            state.stability = recallStability(d: state.difficulty, s: state.stability, r: retrievability, rating: rating)
+            state.state = .review
+        }
+
+        state.reps += 1
+        state.lastReview = now
+        state.scheduledDays = nextInterval(stability: state.stability, desiredRetention: desiredRetention)
+        state.dueDate = Calendar.current.date(byAdding: .day, value: state.scheduledDays, to: now)
+        state.dueDateOverridden = false
+    }
+
+    private static func nextInterval(stability: Double, desiredRetention: Double) -> Int {
+        let decay = -0.5
+        let factor = pow(0.9, 1.0 / decay) - 1
+        let interval = stability * (pow(desiredRetention, 1.0 / decay) - 1) / factor
+        return max(1, min(defaultParams.maximumInterval, Int(round(interval))))
+    }
+
+    private static func forgetRate(elapsed: Int, stability: Double) -> Double {
+        return pow(1 + Double(elapsed) / (9 * stability), -1)
+    }
+
+    // initDifficulty / nextDifficulty / recallStability / forgetStability：
+    // 公式本身不受本次架构调整影响，参考 https://github.com/open-spaced-repetition/ts-fsrs 翻译实现，
+    // 具体系数不在此重复展开。
+}
 ```
 
 单词型的 `LearningRouteTable.FinishedPayload` 直接实例化为 `FSRSRating`（见 husk-word-card-code.md），天然满足这个约束。如果未来某个 CardType 学完时需要携带比单纯 Rating 更多的信息（比如连带一些统计元数据），可以定义自己的类型去遵循 `FSRSRatingConvertible`，只要求提供"怎么从这个类型算出一个 FSRSRating"，不强制"这个类型必须就是 FSRSRating 本身"。
+
+**待编码阶段确认**：`initialize`/`update` 签名新增 `desiredRetention` 参数后，六、6.3 的 `process` 方法与七的 `ReviewEngine.run` 里实际调用 `FSRSEngine.update`/`.initialize` 的地方，需要同步补上"从 `card.unitID` 找到对应 `Unit` 再取 `desiredRetention`"这一步——本文档目前六、七两节的示例代码里这两处调用尚未更新参数列表，属于本次补全遗留的一处待办，建议连同十四节的遗留清单一起处理。
 
 ---
 
@@ -757,7 +855,8 @@ final class LearningEngine {
             // v4.1：FinishedPayload 现在约束为 FSRSRatingConvertible（见二、五、5.7），
             // 直接调用 .fsrsRating 拿到 FSRSRating，编译期保证类型安全，
             // 不再需要运行时强转（取代了此前的 `payload as! FSRSRating` 写法）。
-            FSRSEngine.initialize(&card.fsrs, rating: payload.fsrsRating)
+            // v4.6：initialize 新增 desiredRetention 参数（二），从卡片所属 unit 读取
+            FSRSEngine.initialize(&card.fsrs, rating: payload.fsrsRating, desiredRetention: unit.desiredRetention)
             unit.learningSlots.removeCompletedCard(cardID, from: stepID)
             card.originQueue = nil
             clearLearningProgress(cardID: cardID)
@@ -893,7 +992,8 @@ final class ReviewEngine {
             switch resolved.target {
             case .finished(let payload):
                 await presentSignal(resolved.signal, card: card, step: step, renderer: renderer)
-                FSRSEngine.update(&card.fsrs, rating: payload.fsrsRating)   // 见二 FSRSRatingConvertible
+                // v4.6：update 新增 desiredRetention 参数（二），从卡片所属 unit 读取
+                FSRSEngine.update(&card.fsrs, rating: payload.fsrsRating, desiredRetention: unit.desiredRetention)   // 见二 FSRSRatingConvertible
                 card.postFSRSUpdateHook(context: session)
                 unit.removeFromReview(card)
                 clearReviewSession(cardID: card.id)   // 正常完成，清除持久化的 session
@@ -991,7 +1091,34 @@ func transitionToFullRelearn(card: any Card, unit: Unit, session: ReviewSession,
 
 ---
 
-## 九、随手记捕获（与 v1.0 相同）
+## 九、随手记捕获
+
+> **本节补全说明**：此前只写"与 v1.0 相同"，没有正文，是本次查缺补漏一并发现的遗漏，这里补全 v1.0 原文，不改变任何既有行为。
+
+```swift
+enum QuickCaptureFlow {
+    case promptCreateUnit(cardType: CardType)
+    case captureInto(Unit)
+    case promptSelectUnit(candidates: [Unit])
+}
+
+/// 捕获时归属 Unit 的三态判断（见 husk-architecture-design.md 第四节的理由）：
+/// 该类型下没有 Unit → 引导新建；只有一个 → 不弹，直接归入；有多个 → 必须弹出选择，
+/// 不做静默的"默认 Unit"兜底。
+func quickCapture(cardType: CardType, existingUnits: [Unit]) -> QuickCaptureFlow {
+    let matching = existingUnits.filter { $0.cardType == cardType }
+    switch matching.count {
+    case 0:
+        return .promptCreateUnit(cardType: cardType)
+    case 1:
+        return .captureInto(matching[0])
+    default:
+        return .promptSelectUnit(candidates: matching)
+    }
+}
+```
+
+选定 Unit 后，具体把随手记内容写成一张 `Card` 并标记 `source = .quickCapture`、`isInInbox`（一、`Card` 扩展）为真，属于各 CardType 自己的构造逻辑，本节只覆盖"选哪个 Unit"这一层通用判断。
 
 ## 十、渲染层接口
 
@@ -1089,6 +1216,7 @@ func runLearningSession(unit: Unit, factory: any LearningStepFactory, settings: 
 3. **`any LearningTypeContext`/`any ReviewTypeContext` 的 `Codable` 落地**：与历次遗留问题相同，需要手写编解码 + 类型 tag 注册表。
 4. **`LearningEngine.step()`/`ReviewEngine.run()` 的调用节奏**：UI 层自行决定何时调用。**遗留一个缺口**：十三节给出了 `runLearningSession` 作为 `LearningEngine.step` 的调用方示意，但 `ReviewEngine.run` 目前没有对应的 `runReviewSession` 级别示意代码——本次给 `run` 补上 `settings` 参数后，这个缺失的调用方示意就成了唯一一处"`settings` 从哪里传进来"没有落地的地方。编码阶段需要照着 `runLearningSession` 的样子补一份 `runReviewSession`（或等价的调用方逻辑），确保 `settings` 有真实来源，而不是让 `run` 的 `settings` 参数变成一个没人真正传值的签名。
 5. **`AppSettings.defaultDailyLearningGoal` 的具体默认数值**：v4.2 只定义了字段存在，没有规定默认值该是多少（比如 10 或其他），需要结合实际学习节奏测试后确定，属于产品参数调优而非架构决策。
+6. **六、6.3 的 `process` 方法与七、`ReviewEngine.run` 里调用 `FSRSEngine.initialize`/`.update` 的地方，需要补上 `desiredRetention` 参数**：v4.6 给这两个方法的签名加上了 `desiredRetention: Double`（二），但本文档六、七两节示例代码里实际的调用点还是旧签名，需要编码阶段同步改成"先由 `card.unitID` 查到所属 `Unit`，取其 `desiredRetention` 再传入"。
 
 **v4.0 遗留、已在 v4.1 解决的问题**（记录于此，避免以后误查旧版本文档产生困惑）：
 - ~~`Step.action` 如何表达"复合交互"~~ → 改为不扩展 `StepAction`，用泛型 `RouteTarget<FinishedPayload>.stepWithFollowUp` 表达（见五、5.5）
