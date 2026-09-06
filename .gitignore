@@ -6,3 +6,6 @@ xcuserdata/
 CLAUDE.md
 .wolf/
 .claude/
+
+# FSRS Reference
+swift-fsrs/*
