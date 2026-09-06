@@ -13,5 +13,5 @@ struct FSRSParameters {
         0.11, 0.29605, 2.2698, 0.2315,
         2.9898, 0.51655, 0.6621
     ]
-    var maximumInterval: Int = 32500
+    var maximumInterval: Int = 36500
 }
