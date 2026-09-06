@@ -190,49 +190,71 @@ struct FSRSEngine {
 
     /// - Parameter desiredRetention: 调用方必须传入该卡所属 Unit 的 desiredRetention（四），
     ///   v4.3 起这不再有全局默认值——每个 Unit 创建时通过滑块各自设置（80%–97%，默认 90%）。
+    /// 卡片第一次被评分时调用（新卡入库）。此时没有历史 stability/difficulty 可参考，
+    /// 所以直接用第一次评分查表得到初始 stability，用 initDifficulty 公式算出初始 difficulty，
+    /// 再据此排出第一个复习日期。
     static func initialize(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double) {
         let w = defaultParams.weights
+        // 初始 stability 直接取决于第一次评分：four ratings 对应 weights[0..3]（again/hard/good/easy）。
         state.stability = w[rating.rawValue - 1]
         state.difficulty = initDifficulty(rating: rating)
         state.reps = 1
         state.lapses = 0
         state.lastReview = .now
         state.state = .review
+        // 用刚算出的 stability 反推下一次该在第几天复习。
         state.scheduledDays = nextInterval(stability: state.stability, desiredRetention: desiredRetention)
         state.dueDate = Calendar.current.date(byAdding: .day, value: state.scheduledDays, to: .now)
     }
 
+    /// 卡片已有历史状态时的复习更新：核心思路是"先算这次复习前卡片被记住的概率（retrievability），
+    /// 再根据这次评分把 stability/difficulty 往前推一步"，最后用新的 stability 重新排期。
     static func update(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double) {
         let now = Date()
+        // 距离上次复习过了多少天——retrievability 和"遗忘"都是相对这个间隔算的。
         let elapsed = elapsedDays(from: state.lastReview, to: now)
+        // retrievability：在本次复习发生的这一刻，用户还记得这张卡的概率有多大（0~1）。
+        // 间隔越长、原先的 stability 越低，这个值就越小。
         let retrievability = forgetRate(elapsed: elapsed, stability: state.stability)
 
         state.elapsedDays = elapsed
+        // difficulty 每次复习都会调整，往用户实际感受到的难度方向靠拢。
         state.difficulty = nextDifficulty(d: state.difficulty, rating: rating)
 
         if rating == .again {
+            // 选了"忘记"：说明这次的 retrievability 判断失败了，走"遗忘后重新建立记忆"的
+            // stability 公式（通常会显著降低 stability），并把卡片打回 relearning 状态。
             state.stability = forgetStability(d: state.difficulty, s: state.stability, r: retrievability)
             state.lapses += 1
             state.state = .relearning
         } else {
+            // 选了 hard/good/easy：记住了，用"成功回忆后 stability 如何增长"的公式，
+            // 评分越高（easy）增长越多，评分越低（hard）增长越保守。
             state.stability = recallStability(d: state.difficulty, s: state.stability, r: retrievability, rating: rating)
             state.state = .review
         }
 
         state.reps += 1
         state.lastReview = now
+        // 用更新后的 stability 重新算下一次复习该隔多少天。
         state.scheduledDays = nextInterval(stability: state.stability, desiredRetention: desiredRetention)
         state.dueDate = Calendar.current.date(byAdding: .day, value: state.scheduledDays, to: now)
+        // 这次是正常算法排期，不是特殊规则强制覆盖的日期，所以清掉覆盖标记。
         state.dueDateOverridden = false
     }
 
+    /// 反推：要让"到期那天"的 retrievability 刚好等于 desiredRetention，间隔该排多少天。
+    /// stability 越大、desiredRetention 越低，算出来的间隔越长。
     private static func nextInterval(stability: Double, desiredRetention: Double) -> Int {
         let decay = -0.5
         let factor = pow(0.9, 1.0 / decay) - 1
         let interval = stability * (pow(desiredRetention, 1.0 / decay) - 1) / factor
+        // 至少间隔 1 天，最多不超过 FSRSParameters.maximumInterval（默认 100 年），避免算出离谱的值。
         return max(1, min(defaultParams.maximumInterval, Int(round(interval))))
     }
 
+    /// 遗忘曲线：给定"已经过去多久"和"当前 stability"，估计这一刻还记得的概率。
+    /// elapsed 为 0 时结果为 1（刚复习完必然记得）；elapsed 相对 stability 越大，结果越接近 0。
     private static func forgetRate(elapsed: Int, stability: Double) -> Double {
         return pow(1 + Double(elapsed) / (9 * stability), -1)
     }
