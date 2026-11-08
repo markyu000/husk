@@ -9,9 +9,9 @@ import Foundation
 struct FSRSEngine {
     static let defaultParams = FSRSParameters()
 
-    private static let decay = -0.5
-    private static let stabilityAnchorRetention = 0.9
-    private static let factor = pow(stabilityAnchorRetention, 1.0 / decay) - 1
+    static let decay = -0.5
+    static let stabilityAnchorRetention = 0.9
+    static let factor = pow(stabilityAnchorRetention, 1.0 / decay) - 1
     private static let sMin = 0.01
 
     static func initialize(
