@@ -1,16 +1,22 @@
 # Husk 记忆架构 · 代码文档
 
-> 版本：v4.8 · 日期：2026-08-29
+> 版本：v4.9 · 日期：2026-11-07
 > 配套设计文档：husk-architecture-design.md（决策理由见该文档，尤其第九、十节）
 > 本文档只含接口/协议/类定义，具体某个 CardType 的图内容见各类型自己的代码文档
-> 本文档粒度：接口签名 + 关键算法伪代码，不是可直接编译的完整实现。留空/简化的地方会明确标注。
+> 本文档粒度：类型/结构定义用 Swift；算法、逻辑、行为一律用自然语言规格（做什么、输入、输出、注意事项），不含可执行函数体。
+>
+> **v4.9 变更**（补全 v4.8 遗留的 `ReviewStepFactory` 声明缺口，并把 `masteredStabilityThreshold` 与 `FSRSEngine` 的 `factor`/`decay` 常量落实为真正共享定义，均不改变任何已确定的产品行为）：
+> 1. **`ReviewStepFactory` 协议补全定义**（七、7.0）：`ReviewEngine.run`/`resolveWithFollowUp` 一直使用 `any ReviewStepFactory`，但协议本身从未声明——`LearningStepFactory`（六）有对应声明，其复习侧版本被漏掉了。根据 `WordCardReviewStepFactory`（单词Card代码文档五）的实际实现（`startStepID(for:)`/`buildStep(id:for:)`）补全，与 `LearningStepFactory` 结构对称。
+> 2. **`FSRSEngine.decay`/`stabilityAnchorRetention`/`factor` 从 `private` 提升为 `internal static let`**（二）：编码阶段已这样做（`Husk/Core/FSRS/FSRSEngine.swift`），`Unit.masteredStabilityThreshold`（四）同步改为直接引用这三个常量，不再维护一份数值相同的独立字面量——解决 v4.8 文档遗留清单（原十四节第 7 条）。
 >
 > **v4.8 变更**（desiredRetention 相关的一轮一致性修正与命名澄清，均不改变已确定的产品行为，`forgetRate` 曲线统一除外——这一点是本次唯一的行为变化，理由见下）：
+> - **文档写法**：去掉可执行函数体，规格改为自然语言（不改变 v4.8 行为）。
 > 1. **`forgetRate` 从 decay=-1 的旧曲线统一为 FSRS-5 的 decay=-0.5 曲线**（二）：此前 `forgetRate` 与 `nextInterval` 用了两条不同的遗忘曲线（分别是 `(1+t/9S)^-1` 和 FSRS-5 的 `(1+F·t/S)^-0.5`），只在设计早期占位，本次正式统一成同一条曲线的两个方向（`nextInterval` 是反解，`forgetRate` 是正算），避免 retrievability 计算和调度计算基于不同假设。`factor`/`decay` 提升为 `FSRSEngine` 的静态常量供两处共享。
 > 2. **`Unit.masteredStabilityThreshold` 公式改为与 `nextInterval` 同源反解**（四）：原公式用的正是上面被替换掉的旧曲线，与实际调度用的曲线不一致，R 偏离默认值 0.90 时阈值有 4%–7% 偏差。现在直接对 `nextInterval` 的公式解 stability，两者恒等自洽。
 > 3. **`FSRSEngine.nextInterval` 新增 `desiredRetention` 越界防护**（二）：非法值（0、负数、读盘异常）会使 `pow` 产生 `inf`，进而在 `Int(round(...))` 处 trap 崩溃。加入 clamp 到 `[0.70, 0.99]` 的防线，UI 滑块限制的 80%–97% 之外的异常值不再能击穿到崩溃。
 > 4. **`Card.isFullyLearned` 更名为 `Card.isGraduated`**（一）：与 `WordCard.isCompletelyLearned(in:)`（单词卡代码文档）语义完全不同（前者="学习流程已走完、进入长期复习轮转"，后者="stability 已达阈值、一年内不用再复习"）但命名几乎一样，容易混淆误用，予以更名。`isInInbox` 等其余 `Card` extension 计算属性不受影响。
 > 5. **新增"到期卡定时入队"机制**（四、七）：此前 `originQueue = nil` 的卡只有 `fsrs.dueDate`，没有任何机制在到期后把它放回 `Unit.reviewQueue`——`requeueToReview` 在全文档中从未被调用。现在明确由一个后台定时任务负责这一步，见七新增小节。
+> 6. **补全"用到了却从未声明"的类型**（不改变既有行为）：`AppSettings` 本体（十一，此前只写"与 v1.0 基本相同"）；`StepSlot` / `LearningSlotChain` / `shouldProcess`（六、6.1，此前只写"与 v3.0 相同不重复列出"）；`FSRSEngine` 中 `update`/`initialize` 实际调用但未列入签名的内部辅助（`elapsedDays`、`initDifficulty`、`nextDifficulty`、`recallStability`、`forgetStability`）；`Card` 扩展上的 `isInInbox`。
 >
 > **v4.6 变更**（补全此前两处"与 v1.0 相同/不重复列出"但从未在正文出现过的空白，均为文档遗漏，不改变既有行为；顺带把 v4.3 引入的"desiredRetention 按 Unit 配置"同步进 FSRSEngine 的调用签名，这属于本次补全过程中发现的真实缺口，非单纯格式修订）：
 > 1. **`FSRSState`/`FSRSCardState`/`FSRSParameters`/`FSRSEngine` 补全完整定义**（二）：v1.0 起历次改版只写"与 v1.0 相同，不重复列出"，从未真正出现在文档正文里。
@@ -42,7 +48,7 @@
 > 1. **"这一步答完还要再问一步"的复合交互**（如单词型 Step0 的自测+检查页）：不扩展 `StepAction`，改为在查表结果 `RouteTarget` 上新增 `.stepWithFollowUp` 变体，由引擎收到这个 target 后再多问一轮、再多查一次表。这条能力是架构层通用机制，任何 CardType 有类似需求都可复用，不需要为每种具体复合交互扩展基础 action 类型（见五、5.5）。
 > 2. **`LearningStepFactory.buildSequence` 补上 `settings` 参数**：v4.0 遗漏了这个参数，导致具体 CardType 无法在组装物理槽位链时读取全局设置（比如单词型判断 Step3 是否存在）。
 > 3. **检查页勾选结果如何转换成规则表可查的 `outcome`**：`EngineJudge.evaluate` 的职责保持不变（只把 `StepAction`+`ActionInput` 转成 `ActionResult`），"结果转成具体 CardType 的 outcome 枚举"这一步交给各 CardType 自己的规则表实现里的转换函数负责，架构层的规则表协议明确要求提供这个转换接口（见五、5.7）。
-> 4. **`RouteTarget` 改为架构层统一提供的泛型类型**（`RouteTarget<FinishedPayload>`），不再让每个 CardType 各自定义结构相同的枚举——这样 `.stepWithFollowUp` 是所有类型共用的同一个 case，引擎可以直接 `switch` 识别，不需要额外的跨类型协议（`FollowUpExtractable` 因此被取消）。复习流程对应有 `ReviewRouteTarget<FinishedPayload>`。
+> 4. **`RouteTarget` 改为架构层统一提供的泛型类型**（`RouteTarget<FinishedPayload>`），不再让每个 CardType 各自定义结构相同的枚举——这样 `.stepWithFollowUp` 是所有 CardType 共用的同一个 case，引擎可以直接 `switch` 识别，不需要额外的跨类型协议（`FollowUpExtractable` 因此被取消）。复习流程对应有 `ReviewRouteTarget<FinishedPayload>`。
 > 5. **`ReviewSession` 的持久化被真正落实**：`ReviewEngine.run` 现在会在会话开始时尝试恢复已有的未完成 session，每次推进到下一步就写盘，正常结束/转入完整重学时清除——修复了 v4.0 示例代码把它当纯局部变量处理、导致复习中断会丢失进度的问题。
 > 6. **`FinishedPayload` 加上 `FSRSRatingConvertible` 协议约束**：`LearningRouteTable`/`ReviewRouteTable` 的 `FinishedPayload` 关联类型不再是无约束的任意类型，而是必须能提供 `.fsrsRating: FSRSRating`。这消除了 `process`/`run` 方法里原来需要的 `payload as! FSRSRating` 运行时强转，改为编译期保证的类型安全调用（见二、五、5.7、六、6.3、七）。
 >
@@ -99,19 +105,21 @@ protocol Card: AnyObject, Identifiable {
     // 这里只要求类型提供一个"重置为默认（=完整内容）"和"收窄为子集"的接口，
     // 具体见各类型自己的代码文档。
 }
+```
 
+协议默认实现（架构层统一提供，具体 CardType 可覆盖）：
+
+```swift
 extension Card {
-    func postFSRSUpdateHook(context: ReviewSession?) {}
-
-    var isInInbox: Bool {
-        source == .quickCapture && !addedToQueue
-    }
-
-    var isGraduated: Bool {
-        originQueue == nil
-    }
+    var isInInbox: Bool { source == .quickCapture && !addedToQueue }
 }
+```
 
+- **`postFSRSUpdateHook(context:)`**：FSRS 状态更新之后的钩子。默认什么都不做。输入是可选的当前 `ReviewSession`（学习流程里可能没有会话上下文）。副作用仅由具体 CardType 覆盖时产生（例如单词型"想到了"次日强制复习）。
+- **`isInInbox`**：不在协议要求清单里，由扩展提供。当且仅当 `source == .quickCapture` 且 `addedToQueue == false` 时为真——随手记已捕获、尚未入队。
+- **`isGraduated`**：当且仅当 `originQueue == nil` 时为真，表示已走完学习流程、进入长期复习轮转。协议本身声明了这个只读属性，默认实现就是看 `originQueue` 是否为空。
+
+```swift
 enum QueueKind: Int, Codable {
     case newCards = 0
     case relearn = 1   // 保留 case，新逻辑不再产生此状态
@@ -207,99 +215,84 @@ struct FSRSEngine {
     /// （"stability = 可提取性衰减到 90% 所需的天数"），与 `Unit.desiredRetention`
     /// 无关，任何情况下都不得替换成 desiredRetention——即使 v4.3 之后 retention
     /// 已经改为按 Unit 配置，这个 0.9 仍然是固定的数学常量。
-    private static let decay = -0.5
-    private static let stabilityAnchorRetention = 0.9
-    private static let factor = pow(stabilityAnchorRetention, 1.0 / decay) - 1
+    /// v4.9：从 `private` 提升为 `internal`，供 `Unit.masteredStabilityThreshold`（四）
+    /// 直接引用，不再各自维护一份数值相同的字面量（十四节原第 7 条遗留，已解决）。
+    static let decay = -0.5
+    static let stabilityAnchorRetention = 0.9
+    static let factor = pow(stabilityAnchorRetention, 1.0 / decay) - 1
 
     /// - Parameter desiredRetention: 调用方必须传入该卡所属 Unit 的 desiredRetention（四），
     ///   v4.3 起这不再有全局默认值——每个 Unit 创建时通过滑块各自设置（80%–97%，默认 90%）。
-    /// 卡片第一次被评分时调用（新卡入库）。此时没有历史 stability/difficulty 可参考，
-    /// 所以直接用第一次评分查表得到初始 stability，用 initDifficulty 公式算出初始 difficulty，
-    /// 再据此排出第一个复习日期。
-    static func initialize(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double) {
-        let w = defaultParams.weights
-        // 初始 stability 直接取决于第一次评分：four ratings 对应 weights[0..3]（again/hard/good/easy）。
-        state.stability = w[rating.rawValue - 1]
-        state.difficulty = initDifficulty(rating: rating)
-        state.reps = 1
-        state.lapses = 0
-        state.lastReview = .now
-        state.state = .review
-        // 用刚算出的 stability 反推下一次该在第几天复习。
-        state.scheduledDays = nextInterval(stability: state.stability, desiredRetention: desiredRetention)
-        state.dueDate = Calendar.current.date(byAdding: .day, value: state.scheduledDays, to: .now)
-    }
-
-    /// 卡片已有历史状态时的复习更新：核心思路是"先算这次复习前卡片被记住的概率（retrievability），
-    /// 再根据这次评分把 stability/difficulty 往前推一步"，最后用新的 stability 重新排期。
-    static func update(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double) {
-        let now = Date()
-        // 距离上次复习过了多少天——retrievability 和"遗忘"都是相对这个间隔算的。
-        let elapsed = elapsedDays(from: state.lastReview, to: now)
-        // retrievability：在本次复习发生的这一刻，用户还记得这张卡的概率有多大（0~1）。
-        // 与 nextInterval 共用同一条 FSRS-5 曲线（decay/factor，见上），间隔越长、
-        // 原先的 stability 越低，这个值就越小。
-        let retrievability = forgetRate(elapsed: elapsed, stability: state.stability)
-
-        state.elapsedDays = elapsed
-        // difficulty 每次复习都会调整，往用户实际感受到的难度方向靠拢。
-        state.difficulty = nextDifficulty(d: state.difficulty, rating: rating)
-
-        if rating == .again {
-            // 选了"忘记"：说明这次的 retrievability 判断失败了，走"遗忘后重新建立记忆"的
-            // stability 公式（通常会显著降低 stability），并把卡片打回 relearning 状态。
-            state.stability = forgetStability(d: state.difficulty, s: state.stability, r: retrievability)
-            state.lapses += 1
-            state.state = .relearning
-        } else {
-            // 选了 hard/good/easy：记住了，用"成功回忆后 stability 如何增长"的公式，
-            // 评分越高（easy）增长越多，评分越低（hard）增长越保守。
-            state.stability = recallStability(d: state.difficulty, s: state.stability, r: retrievability, rating: rating)
-            state.state = .review
-        }
-
-        state.reps += 1
-        state.lastReview = now
-        // 用更新后的 stability 重新算下一次复习该隔多少天。
-        state.scheduledDays = nextInterval(stability: state.stability, desiredRetention: desiredRetention)
-        state.dueDate = Calendar.current.date(byAdding: .day, value: state.scheduledDays, to: now)
-        // 这次是正常算法排期，不是特殊规则强制覆盖的日期，所以清掉覆盖标记。
-        state.dueDateOverridden = false
-    }
-
-    /// 反推：要让"到期那天"的 retrievability 刚好等于 desiredRetention，间隔该排多少天。
-    /// stability 越大、desiredRetention 越低，算出来的间隔越长。
-    ///
-    /// v4.8：`desiredRetention` 加入越界 clamp。UI 滑块限制在 80%–97%，
-    /// 但这道防线只护住创建流程；读盘异常或未来别的写入路径仍可能带来非法值
-    /// （0、负数、>1），会让 `pow` 产生 `inf`，`Int(round(inf))` 在 Swift 里是
-    /// trap 而非饱和截断，会直接崩溃。这里 clamp 到比产品滑块范围更宽松的
-    /// [0.70, 0.99]，只为兜底极端脏数据，不代表放宽产品允许的选择范围。
-    private static func nextInterval(stability: Double, desiredRetention: Double) -> Int {
-        let clampedRetention = min(0.99, max(0.70, desiredRetention))
-        let interval = stability * (pow(clampedRetention, 1.0 / decay) - 1) / factor
-        // 至少间隔 1 天，最多不超过 FSRSParameters.maximumInterval（默认 100 年），避免算出离谱的值。
-        return max(1, min(defaultParams.maximumInterval, Int(round(interval))))
-    }
-
-    /// 遗忘曲线：给定"已经过去多久"和"当前 stability"，估计这一刻还记得的概率。
-    /// elapsed 为 0 时结果为 1（刚复习完必然记得）；elapsed 相对 stability 越大，结果越接近 0。
-    ///
-    /// v4.8：改为与 `nextInterval` 同一条 FSRS-5 曲线（此前误用 decay=-1 的
-    /// 旧曲线 `(1+t/9S)^-1`，与调度实际使用的曲线不一致，已统一）。
-    private static func forgetRate(elapsed: Int, stability: Double) -> Double {
-        return pow(1 + factor * Double(elapsed) / stability, decay)
-    }
-
-    // initDifficulty / nextDifficulty / recallStability / forgetStability：
-    // 公式本身不受本次架构调整影响，参考 https://github.com/open-spaced-repetition/ts-fsrs 翻译实现，
-    // 具体系数不在此重复展开。
+    static func initialize(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double)
+    static func update(_ state: inout FSRSState, rating: FSRSRating, desiredRetention: Double)
+    private static func nextInterval(stability: Double, desiredRetention: Double) -> Int
+    private static func forgetRate(elapsed: Int, stability: Double) -> Double
+    private static func elapsedDays(from lastReview: Date?, to now: Date) -> Int
+    private static func initDifficulty(rating: FSRSRating) -> Double
+    private static func nextDifficulty(difficulty: Double, rating: FSRSRating) -> Double
+    private static func recallStability(difficulty: Double, stability: Double, retrievability: Double, rating: FSRSRating) -> Double
+    private static func forgetStability(difficulty: Double, stability: Double, retrievability: Double) -> Double
 }
 ```
 
-单词型的 `LearningRouteTable.FinishedPayload` 直接实例化为 `FSRSRating`（见 husk-word-card-code.md），天然满足这个约束。如果未来某个 CardType 学完时需要携带比单纯 Rating 更多的信息（比如连带一些统计元数据），可以定义自己的类型去遵循 `FSRSRatingConvertible`，只要求提供"怎么从这个类型算出一个 FSRSRating"，不强制"这个类型必须就是 FSRSRating 本身"。
+`FSRSRating` 对 `FSRSRatingConvertible` 的实现：直接返回自身。单词型的 `LearningRouteTable.FinishedPayload` 直接实例化为 `FSRSRating`（见 husk-word-card-code.md），天然满足这个约束。如果未来某个 CardType 学完时需要携带比单纯 Rating 更多的信息（比如连带一些统计元数据），可以定义自己的类型去遵循 `FSRSRatingConvertible`，只要求提供"怎么从这个类型算出一个 FSRSRating"，不强制"这个类型必须就是 FSRSRating 本身"。
 
-**待编码阶段确认**：`initialize`/`update` 签名新增 `desiredRetention` 参数后，六、6.3 的 `process` 方法与七的 `ReviewEngine.run` 里实际调用 `FSRSEngine.update`/`.initialize` 的地方，需要同步补上"从 `card.unitID` 找到对应 `Unit` 再取 `desiredRetention`"这一步——本文档目前六、七两节的示例代码里这两处调用尚未更新参数列表，属于本次补全遗留的一处待办，建议连同十四节的遗留清单一起处理。
+### `FSRSEngine.initialize`
+
+- **做什么**：卡片第一次被评分时调用（新卡入库）。此时没有历史 stability/difficulty 可参考，所以直接用第一次评分查表得到初始 stability，用 `initDifficulty` 公式算出初始 difficulty，再据此排出第一个复习日期。学习引擎学完时调用（见六、6.3）。
+- **输入**：待写入的 `FSRSState`（inout）、本次学完对应的 `FSRSRating`、该卡所属 Unit 的 `desiredRetention`。
+- **输出/副作用**：就地改写 `state`，不另返回值。
+  - `stability` 取 `defaultParams.weights[rating.rawValue - 1]`（again/hard/good/easy 对应 `weights[0...3]`）。没有额外的初始 stability 下限。
+  - `difficulty` 由 `initDifficulty(rating:)` 算出（公式不在此展开，见下）。
+  - `reps = 1`，`lapses = 0`，`lastReview` 为当前时刻，`state = .review`。
+  - `scheduledDays` 由刚算出的 `stability` 经 `nextInterval(stability:desiredRetention:)` 得到。
+  - `dueDate` 为当前日历日加上 `scheduledDays` 天（`Calendar.current.date(byAdding: .day, ...)`）。
+- **注意事项**：调用方必须显式传入 Unit 的 `desiredRetention`，不能依赖全局默认值。
+
+### `FSRSEngine.update`
+
+- **做什么**：卡片已有历史状态时的复习更新。核心思路是"先算这次复习前卡片被记住的概率（retrievability），再根据这次评分把 stability/difficulty 往前推一步"，最后用新的 stability 重新排期。复习引擎学完时调用（见七）。
+- **输入**：已有的 `FSRSState`（inout）、本次评分、该卡所属 Unit 的 `desiredRetention`。
+- **输出/副作用**：就地改写 `state`。
+  1. 用内部辅助 `elapsedDays(from:to:)` 由 `lastReview` 算到当前时刻的经过天数，记为 `elapsed`。retrievability 和"遗忘"都相对这个间隔计算。
+  2. `retrievability = forgetRate(elapsed:stability:)`。与 `nextInterval` 共用同一条 FSRS-5 曲线（`decay`/`factor`，见上）；间隔越长、原先的 stability 越低，这个值就越小。
+  3. 写入 `elapsedDays = elapsed`；`difficulty = nextDifficulty(d:rating:)`（公式不在此展开）。difficulty 每次复习都会调整，往用户实际感受到的难度方向靠拢。
+  4. 若 `rating == .again`：选了"忘记"，走"遗忘后重新建立记忆"的 stability 公式（通常会显著降低 stability）——`stability = forgetStability(...)`，`lapses` 加 1，`state = .relearning`。否则（hard/good/easy）：记住了，用"成功回忆后 stability 如何增长"的公式，评分越高（easy）增长越多，评分越低（hard）增长越保守——`stability = recallStability(...)`，`state = .review`。
+  5. `reps` 加 1；`lastReview` 改为当前时刻。
+  6. 用更新后的 stability 重新算下一次复习该隔多少天：`scheduledDays = nextInterval(...)`；`dueDate` 为当前日历日加上 `scheduledDays` 天。
+  7. `dueDateOverridden` 置为 `false`（这次是正常算法排期，不是特殊规则强制覆盖的日期，所以清掉覆盖标记）。
+- **注意事项**：`elapsedDays(from:to:)` 是引擎内部辅助，本文档不展开其日历日算法。
+
+### `FSRSEngine.nextInterval`
+
+- **做什么**：反推：要让"到期那天"的 retrievability 刚好等于 `desiredRetention`，间隔该排多少天。stability 越大、desiredRetention 越低，算出来的间隔越长。
+- **输入**：`stability`、`desiredRetention`。
+- **输出**：夹紧后的整数天数。
+- **公式**（与 `forgetRate` 同一条 FSRS-5 曲线的反解）：
+  1. 先把 `desiredRetention` clamp 到 `[0.70, 0.99]`，得到 `clampedRetention`。
+  2. `interval = stability × (clampedRetention^(1/decay) - 1) / factor`，其中 `decay`、`factor` 即引擎静态常量（`factor` 由 `stabilityAnchorRetention = 0.9` 算出，底数不是 `desiredRetention`）。
+  3. 四舍五入为整数后夹紧到 `[1, defaultParams.maximumInterval]`（`maximumInterval` 默认 36500，即 100 年），避免算出离谱的值。
+- **注意事项（v4.8 clamp）**：UI 滑块限制在 80%–97%，但这道防线只护住创建流程；读盘异常或未来别的写入路径仍可能带来非法值（0、负数、>1），会让 `pow` 产生 `inf`，`Int(round(inf))` 在 Swift 里是 trap 而非饱和截断，会直接崩溃。这里 clamp 到比产品滑块范围更宽松的 `[0.70, 0.99]`，只为兜底极端脏数据，不代表放宽产品允许的选择范围。
+
+### `FSRSEngine.forgetRate`
+
+- **做什么**：遗忘曲线：给定"已经过去多久"和"当前 stability"，估计这一刻还记得的概率（retrievability）。
+- **输入**：`elapsed`（整数天）、`stability`。
+- **输出**：`Double`。`elapsed` 为 0 时结果为 1（刚复习完必然记得）；`elapsed` 相对 stability 越大，结果越接近 0。
+- **公式**（v4.8：与 `nextInterval` 同一条 FSRS-5 曲线；此前误用 decay=-1 的旧曲线 `(1+t/9S)^-1`，与调度实际使用的曲线不一致，已统一）：
+  - `(1 + factor × elapsed / stability)^decay`
+  - `factor`、`decay` 与 `nextInterval` 共享，不得再写一套独立的 `9` 或 `-1`。
+
+### `FSRSEngine.elapsedDays(from:to:)`
+
+- **做什么**：由上次复习时刻算到本次更新时刻，得到 `update` 写入 `elapsedDays`、并交给 `forgetRate` 的经过天数。
+- **输入**：`lastReview`（可能为 nil）、当前时刻 `now`。
+- **输出**：非负整数天。`lastReview == nil` 时为 0。
+- **注意事项**：具体按本地日历日还是墙钟 24 小时计算，留给编码阶段与 `dueDate` 的日历加法对齐；本文档不展开日历算法。
+
+`initDifficulty` / `nextDifficulty` / `recallStability` / `forgetStability`：`initialize`/`update` 会调用它们。公式本身不受本次架构调整影响，参考 https://github.com/open-spaced-repetition/ts-fsrs 翻译实现，具体系数不在此重复展开。
+
+**待编码阶段确认**：`initialize`/`update` 签名新增 `desiredRetention` 参数后，六、6.3 的 `process` 方法与七的 `ReviewEngine.run` 里实际调用 `FSRSEngine.update`/`.initialize` 的地方，需要同步补上"从 `card.unitID` 找到对应 `Unit` 再取 `desiredRetention`"这一步——本文档目前六、七两节的规格描述里这两处调用尚未更新参数列表，属于本次补全遗留的一处待办，建议连同十四节的遗留清单一起处理。
 
 ---
 
@@ -345,7 +338,7 @@ protocol LearningTypeContext: Codable {}
 /// 复习会话同样可能被中断（切后台、来电话、被系统杀掉），中断后重新进入
 /// 这张卡的复习时，应该能读到中断前的 ReviewSession、从 currentStepID
 /// 指示的那一步继续，而不是无声地从 reviewAssessment 重新开始一遍。
-/// 具体的写盘时机与恢复流程见七、ReviewEngine.run 的实现。
+/// 具体的写盘时机与恢复流程见七、ReviewEngine.run 的规格。
 struct ReviewSession: Codable {
     let cardID: UUID
     var currentStepID: StepID
@@ -392,70 +385,32 @@ final class Unit {
     /// 只是"学习会话一轮学多少"的批次大小，用户可以无限次"再学一轮"。
     var dailyLearningGoal: Int?
 
-    @Transient lazy var learningEngine: LearningEngine = LearningEngine(unit: self)
-    @Transient lazy var reviewEngine: ReviewEngine = ReviewEngine(unit: self)
+    @Transient lazy var learningEngine: LearningEngine
+    @Transient lazy var reviewEngine: ReviewEngine
 
-    init(cardType: CardType, name: String, desiredRetention: Double = 0.90) {
-        self.id = UUID()
-        self.cardType = cardType
-        self.name = name
-        self.createdAt = .now
-        self.learningSlots = LearningSlotChain(cardType: cardType)
-        self.desiredRetention = desiredRetention
-    }
+    init(cardType: CardType, name: String, desiredRetention: Double = 0.90)
 
-    /// 解析出这个 Unit 实际生效的学习目标：自己设置过就用自己的，否则回退全局默认值
-    func resolvedLearningGoal(settings: AppSettings) -> Int {
-        dailyLearningGoal ?? settings.defaultDailyLearningGoal
-    }
-
-    var reviewCount: Int { reviewQueue.count }
-    var learningCount: Int { learningSlots.totalCardCount }
-
-    func removeFromReview(_ card: any Card) {
-        reviewQueue.removeAll { $0.id == card.id }
-        card.originQueue = nil
-    }
-
-    /// v4.8 补充调用方说明：此前全文档没有任何地方调用这个方法——
-    /// 一张卡学完学习流程后 originQueue 变 nil，但从未被真正放回过
-    /// reviewQueue。v4.8 起明确由后台定时任务 `DueCardScheduler`（七、7.x）
-    /// 负责按 fsrs.dueDate 扫描并调用这个方法，不再是一个孤立的、
-    /// 未被使用的工具方法。
-    func requeueToReview(_ card: any Card) {
-        removeFromReview(card)
-        reviewQueue.append(card)
-        card.originQueue = .review
-    }
-
-    /// v4.3 新增，v4.8 修正公式：某张卡在这个 Unit 的 desiredRetention 下，
-    /// stability 达到多少就意味着下一次复习间隔已经自然拉长到约一年（365 天）
-    /// 以后——统一以"间隔 ≥ 365 天"作为跨 Unit 可比的"学完不再复习"判定标准
-    /// （见架构设计文档十）。retention 越高，需要越高的 stability 才能撑出
-    /// 同样长的间隔，所以这个阈值是随 desiredRetention 变化的，不是一个固定天数。
-    ///
-    /// **v4.8 修正**：原公式用的是 `interval = stability × 9 × (1/R - 1)`
-    /// （decay=-1 的旧曲线），与 `FSRSEngine.nextInterval` 实际调度用的
-    /// decay=-0.5 曲线不一致，R 偏离默认值 0.90 时阈值有 4%–7% 的偏差。
-    /// 现在直接对 `nextInterval` 的公式反解 stability，两者恒等自洽：
-    ///   nextInterval:  interval = stability × (R^(1/decay) - 1) / factor
-    ///   固定 interval = 365，解出 stability：
-    ///   stability = 365 × factor / (R^(1/decay) - 1)
-    /// 其中 factor、decay 与 `FSRSEngine.nextInterval` 内部使用的完全相同
-    /// （FSRS-5 曲线，decay=-0.5，factor 由 stability 定义锚点 0.9 算出）。
-    /// R = 0.90 时代入得 365，与旧公式在默认值处的结果一致，偏离处不再有偏差。
-    ///
-    /// 这是纯计算属性，不持久化、不缓存——`fsrs.stability` 随复习不断变化，
-    /// 每次需要判定时直接现算即可，不存在数据不同步的问题。
-    var masteredStabilityThreshold: Double {
-        let decay = -0.5
-        let factor = pow(0.9, 1.0 / decay) - 1
-        return 365.0 * factor / (pow(desiredRetention, 1.0 / decay) - 1)
-    }
+    func resolvedLearningGoal(settings: AppSettings) -> Int
+    var reviewCount: Int { get }
+    var learningCount: Int { get }
+    func removeFromReview(_ card: any Card)
+    func requeueToReview(_ card: any Card)
+    var masteredStabilityThreshold: Double { get }
 }
 ```
 
-**待编码阶段确认**：`masteredStabilityThreshold` 里的 `decay`/`factor` 与 `FSRSEngine.nextInterval` 内部的同名常量此刻是两份独立字面量，数值相同但没有共享定义——编码阶段应该让 `Unit` 通过某种方式复用 `FSRSEngine` 里的常量（比如把 `factor`/`decay` 从 `private` 提升为 `internal static let`），避免以后任何一处改动 FSRS 曲线参数时忘记同步另一处，重新制造本次修正的同一类不一致。已记入十四节遗留清单。
+- **`init`**：输入 `cardType`、`name`、可选 `desiredRetention`（默认 0.90）。副作用：生成新 `id`（UUID）、写入 `cardType`/`name`、`createdAt` 为当前时刻、`learningSlots` 用 `LearningSlotChain(cardType:)` 建一条空链、把传入的 `desiredRetention` 赋给不可变字段。`icon`/`accentColor`/`dailyLearningGoal` 不在此初始化。引擎字段为 `@Transient lazy`，首次访问时分别构造 `LearningEngine(unit: self)` / `ReviewEngine(unit: self)`。`desiredRetention` 创建后不可修改，合法范围 0.80–0.97，默认 0.90。
+- **`resolvedLearningGoal(settings:)`**：解析本 Unit 实际生效的学习目标。若 `dailyLearningGoal` 非 nil 用自己的，否则回退 `settings.defaultDailyLearningGoal`。
+- **`reviewCount`**：等于 `reviewQueue.count`。
+- **`learningCount`**：等于 `learningSlots.totalCardCount`。
+- **`removeFromReview(_:)`**：从 `reviewQueue` 按 `card.id` 全部移除，并把该卡 `originQueue` 置为 `nil`。
+- **`requeueToReview(_:)`**：先 `removeFromReview`，再把卡追加到 `reviewQueue` 末尾，并把 `originQueue` 设为 `.review`。**v4.8 补充调用方说明**：此前全文档没有任何地方调用这个方法——一张卡学完学习流程后 `originQueue` 变 `nil`，但从未被真正放回过 `reviewQueue`。v4.8 起明确由后台定时任务 `DueCardScheduler`（七、7.x）负责按 `fsrs.dueDate` 扫描并调用这个方法，不再是一个孤立的、未被使用的工具方法。
+- **`masteredStabilityThreshold`**：某张卡在这个 Unit 的 `desiredRetention` 下，stability 达到多少就意味着下一次复习间隔已经自然拉长到约一年（365 天）以后——统一以"间隔 ≥ 365 天"作为跨 Unit 可比的"学完不再复习"判定标准（见架构设计文档十）。retention 越高，需要越高的 stability 才能撑出同样长的间隔，所以这个阈值随 `desiredRetention` 变化，不是固定天数。这是纯计算属性，不持久化、不缓存——`fsrs.stability` 随复习不断变化，每次需要判定时直接现算即可，不存在数据不同步的问题。
+  - **v4.8 修正**：原公式用的是 `interval = stability × 9 × (1/R - 1)`（decay=-1 的旧曲线），与 `FSRSEngine.nextInterval` 实际调度用的 decay=-0.5 曲线不一致，R 偏离默认值 0.90 时阈值有 4%–7% 的偏差。现在直接对 `nextInterval` 的公式反解 stability，两者恒等自洽：
+    - `nextInterval`：`interval = stability × (R^(1/decay) - 1) / factor`
+    - 固定 `interval = 365`，解出 `stability = 365 × factor / (R^(1/decay) - 1)`
+  - 其中 `factor`、`decay` 与 `FSRSEngine.nextInterval` 内部使用的完全相同（FSRS-5 曲线，`decay = -0.5`，`factor` 由 stability 定义锚点 0.9 算出）。R = 0.90 时代入得 365，与旧公式在默认值处的结果一致，偏离处不再有偏差。
+  - **v4.9**：直接引用 `FSRSEngine.factor`/`FSRSEngine.decay`（二，已从 `private` 提升为 `internal static let`），不再在 `Unit` 侧维护一份数值相同的独立字面量：`365.0 * FSRSEngine.factor / (pow(desiredRetention, 1.0 / FSRSEngine.decay) - 1)`。
 
 **v4.0 变化**：`Unit` 不再持有 `reviewEngineState: EngineState`——原来的 `EngineState`（含 `currentCardID`/`currentStepID`/`typeContext`）被 `ReviewSession`（三、3.2）取代，复习引擎的运行时状态现在跟着具体的卡（`ReviewSession` 按 `cardID` 索引），不再是挂在 `Unit` 上的单一一份状态。这个变化的动机：原来的 `EngineState` 隐含假设"引擎同一时刻只服务一张卡"，这个假设本身没错，但把状态存在 `Unit` 上、而不是跟着卡片走，会让"卡片自己的临时状态"和"引擎当前在忙什么"这两个概念纠缠在一起，拆开后职责更清楚。
 
@@ -491,13 +446,13 @@ protocol RouteRuleMatching {
 /// 通用查表函数：给定候选规则集合，返回特异性最高的一条。
 /// 具体 CardType 的规则类型需要各自实现 matchesKey/matchesConditions/specificity，
 /// 但查表逻辑本身是通用的，写一次即可复用给学习和复习两套规则表。
-func resolveRoute<Rule: RouteRuleMatching>(candidates: [Rule]) -> Rule? {
-    candidates.max { $0.specificity < $1.specificity }
-    // 注意：真正的实现里，"取最大值"之前必须先做"是否存在并列最高特异性"的检查
-    // （见 5.2 的 DEBUG 断言），max(by:) 本身在并列时会静默选其中一个，
-    // 不能直接依赖它来解决冲突，这里只是示意查表本身的核心逻辑
-}
+func resolveRoute<Rule: RouteRuleMatching>(candidates: [Rule]) -> Rule?
 ```
+
+- **做什么**：在已经筛过的候选规则里选出特异性最高的一行。
+- **输入**：`candidates`——调用方应先按 `matchesKey` + `matchesConditions` 滤出合格行，再交给本函数。
+- **输出**：特异性最大的那一行；候选为空则为空。
+- **注意事项**：真正实现里，取最大值之前必须先做"是否存在并列最高特异性"的检查（见 5.2 的 DEBUG 断言）。单纯取 max 在并列时会静默选其中一个，不能直接依赖它来解决冲突。这里只规定查表核心是"特异性最高者胜"，冲突检测是独立步骤。
 
 ### 5.2 冲突检测：DEBUG 断言
 
@@ -507,16 +462,14 @@ func resolveRoute<Rule: RouteRuleMatching>(candidates: [Rule]) -> Rule? {
 /// 在 DEBUG 构建下，App 启动时对每个 CardType 的规则表调用一次，
 /// 检测是否存在"同键、同特异性、条件不互斥、结果却不同"的行对。
 /// Release 构建不运行这个检查（假设已经在开发阶段修正过），避免运行时开销。
-func assertNoRouteRuleConflicts<Rule: RouteRuleMatching>(_ rules: [Rule]) {
-    #if DEBUG
-    // 具体实现：按键字段分组，组内两两比较条件字段是否存在"每个字段要么至少一方是nil，
-    // 要么双方非nil且值相等"这种关系（即两行的条件"相容"，存在实际状态能同时满足两者），
-    // 且 specificity 相等、但 target/signal 不同 —— 命中即 assertionFailure
-    // 具体比对算法留给编码阶段实现，这里只定义这个检查函数应该存在、应该在 DEBUG 下于
-    // App 启动时被调用一次（比如放在 AppSettings 或规则表本身的静态初始化里触发）。
-    #endif
-}
+func assertNoRouteRuleConflicts<Rule: RouteRuleMatching>(_ rules: [Rule])
 ```
+
+- **做什么**：静态检查规则表是否存在冲突行对。
+- **输入**：某个 CardType 的完整规则数组。
+- **输出/副作用**：DEBUG 构建下若发现冲突则断言失败（开发期 crash）；Release 构建不运行，无运行时开销。
+- **判定算法**（编码阶段实现细节，见十四节第 1 条）：按键字段分组；组内两两比较——两行条件"相容"当且仅当每个条件字段要么至少一方是 nil，要么双方非 nil 且值相等（即存在实际状态能同时满足两者）；若再叠加 specificity 相等、但 target/signal 不同，即命中冲突。
+- **注意事项**：应在 App 启动时对每个 CardType 的规则表调用一次（例如放在 AppSettings 或规则表本身的静态初始化里触发）。本文档只规定这个检查必须存在、必须仅 DEBUG 运行。
 
 ### 5.3 数据存放：内嵌 Swift 静态数组
 
@@ -537,17 +490,18 @@ enum FailureSignal: Codable {
 
 ### 5.4.1 `ActionResult`：正式定义（v4.4 补全，此前只被各处引用从未正式声明）
 
-`EngineJudge.evaluate(action:input:) -> ActionResult` 是 `StepAction` 判定环节的通用出口——不论具体 CardType，任何一个 Step 答完后，都先经过这一步产出一个 `ActionResult`，再由各 CardType 自己的 `outcomeKey(from:)` 翻译成具体的查表用 outcome。这个类型本身此前只以 `.boolResult`/`.timedAssessmentResult`/`.checklistResult`/`.listeningCheckResult` 等 case 的形式散落在各处 switch 分支里出现，从未给出过 enum 本身的声明，这里补上：
+`EngineJudge.evaluate(action:input:) -> ActionResult` 是 `StepAction` 判定环节的通用出口——不论具体 CardType，任何一个 Step 答完后，都先经过这一步产出一个 `ActionResult`，再由各 CardType 自己的 `outcomeKey(from:)` 翻译成具体的查表用 outcome。这个类型本身此前只以 `.boolResult`/`.timedAssessmentResult`/`.checklistResult`/`.listeningCheckResult` 等 case 的形式散落在各处分支里出现，从未给出过 enum 本身的声明，这里补上：
 
 ```swift
 /// EngineJudge.evaluate 的统一返回类型。case 与 StepAction 的具体形式一一对应
-/// （见二、StepAction 各 case），新增一种 StepAction 形式时需要在这里同步新增一个 case。
+/// （见 StepAction 各 case），新增一种 StepAction 形式时需要在这里同步新增一个 case。
 enum ActionResult {
     case boolResult(Bool)
     // 用于一次性对/错判定的 Step（如拼写测试、选词题），true=答对。
 
     case timedAssessmentResult(TimedAssessment)
     // 用于限时自测类 Step（如单词型 Step0），payload 是具体选中的自测档位。
+    // TimedAssessment 本体见 husk-word-card-code.md 二、2.3（目前只有单词型使用该四分支自测）。
 
     case listeningCheckResult(ListeningSelfCheck)
     // 用于二选一的听力自测类 Step（如单词型 Step6，见 husk-word-card-code.md 六、
@@ -607,38 +561,27 @@ enum ActionInput {
 /// 成具体的查表用 outcome（见五、5.7）。这里只判断"这次操作本身对不对/是什么形式的结果"，
 /// 不知道任何具体 CardType 的语义。
 enum EngineJudge {
-    static func evaluate(action: StepAction, input: ActionInput) -> ActionResult {
-        switch (action, input) {
-        case (.multipleChoice(_, let correctIndex), .selectedIndex(let i)):
-            return .boolResult(i == correctIndex)
-
-        case (.spelling(let correct, let tolerance), .typedText(let text)):
-            return .boolResult(matches(text, correct, tolerance))
-
-        case (.timedSelfAssessment, .timedChoice(let choice, _)):
-            return .timedAssessmentResult(choice)
-
-        case (.binarySelfAssessment, .binaryChoice(let choice)):
-            return .listeningCheckResult(choice)
-
-        case (.checklistConfirm, .checklistSelection(let unchecked)):
-            return .checklistResult(uncheckedItems: unchecked)
-
-        default:
-            fatalError("action 与 input 类型不匹配，说明 UI 层传错了数据")
-        }
-    }
-
-    private static func matches(_ input: String, _ answer: String, _ rule: SpellingTolerance) -> Bool {
-        switch rule {
-        case .exact: return input == answer
-        case .caseInsensitive: return input.lowercased() == answer.lowercased()
-        }
-    }
+    static func evaluate(action: StepAction, input: ActionInput) -> ActionResult
 }
 ```
 
-**与 8/15 早期草稿的一处命名订正**：早期草稿里 `binarySelfAssessment` 分支产出的是 `.binaryAssessmentResult(ListeningSelfCheck)`，v4.4 正式声明 `ActionResult`（5.4.1）时把这个 case 改名为 `.listeningCheckResult(ListeningSelfCheck)`，语义更贴合"这是 Step6 的听音自测专用结果"。上面 `EngineJudge.evaluate` 已按 v4.4 的正式命名书写，不是历史遗留的旧名字。
+**`evaluate` 映射表**（action 与 input 必须成对出现，错配视为编程错误，不是用户作答错误）：
+
+| `StepAction` | `ActionInput` | `ActionResult` |
+|---|---|---|
+| `.multipleChoice(_, correctIndex)` | `.selectedIndex(i)` | `.boolResult(i == correctIndex)` |
+| `.spelling(correct, tolerance)` | `.typedText(text)` | `.boolResult`（见下方拼写比对） |
+| `.timedSelfAssessment` | `.timedChoice(choice, elapsedMs)` | `.timedAssessmentResult(choice)`（`elapsedMs` 不参与判定） |
+| `.binarySelfAssessment` | `.binaryChoice(choice)` | `.listeningCheckResult(choice)` |
+| `.checklistConfirm` | `.checklistSelection(unchecked)` | `.checklistResult(uncheckedItems: unchecked)` |
+| 其他组合 | — | 编程错误：UI 层把错误类型的 input 交给了该 action |
+
+拼写比对：
+
+- `.exact`：输入字符串与正确答案完全相等（区分大小写）。
+- `.caseInsensitive`：双方都转成小写后再比较是否相等。
+
+**与 8/15 早期草稿的一处命名订正**：早期草稿里 `binarySelfAssessment` 分支产出的是 `.binaryAssessmentResult(ListeningSelfCheck)`，v4.4 正式声明 `ActionResult`（5.4.1）时把这个 case 改名为 `.listeningCheckResult(ListeningSelfCheck)`，语义更贴合"这是 Step6 的听音自测专用结果"。上面映射已按 v4.4 的正式命名书写，不是历史遗留的旧名字。
 
 `checklistConfirm` 同样订正：早期草稿是 `case checklistConfirm(items: [ChecklistItem])`，不带 `allowEmptySelection`；但 husk-word-card-code.md 3.2/4.4 节的实际调用（`buildCheckPageStep(allowEmptySelection:)`/`buildReviewCheckPageStep()`）已经在传这个参数，说明这个字段是后续迭代中加上、但从未回填进 `StepAction` 本身的正式声明。上面按实际调用方式补全。
 
@@ -669,7 +612,7 @@ enum RouteTarget<FinishedPayload> {
    引擎可以在这种情况下触发一次 DEBUG 断言防止无限递归）
 4. 按这次查表结果正常处理（挪动槽位/学完/展示 signal），流程与普通一次查表完全一致
 
-因为所有 CardType 共用同一个泛型 `RouteTarget<FinishedPayload>`，引擎在 `switch` 时可以直接匹配 `.stepWithFollowUp` 这个 case，**不需要任何跨类型识别的协议**（v4.1 早前草稿设想的 `FollowUpExtractable` 协议因此被取消，见十三"已解决问题"记录）。这个机制是通用的，不知道"检查页"这种具体细节——引擎只认"target 是 stepWithFollowUp 就再多问一轮、再查一次表"这条规则，具体触发条件（自测选了想到了）、具体多问的是什么（检查页）完全由单词型自己的规则表决定。
+因为所有 CardType 共用同一个泛型 `RouteTarget<FinishedPayload>`，引擎可以直接识别 `.stepWithFollowUp` 这个 case，**不需要任何跨类型识别的协议**（v4.1 早前草稿设想的 `FollowUpExtractable` 协议因此被取消，见十三"已解决问题"记录）。这个机制是通用的，不知道"检查页"这种具体细节——引擎只认"target 是 stepWithFollowUp 就再多问一轮、再查一次表"这条规则，具体触发条件（自测选了想到了）、具体多问的是什么（检查页）完全由单词型自己的规则表决定。
 
 ### 5.6 失败详情页：引擎通用能力
 
@@ -689,7 +632,7 @@ struct DetailSection {
 
 ### 5.7 规则表协议：`LearningRouteTable` / `ReviewRouteTable`（v4.1 补全）
 
-v4.0 的引擎示例代码（六、七节）直接调用了 `ruleTable.resolve(...)`/`ruleTable.outcomeKey(...)` 等方法，但没有给出正式的协议定义，这里补全：
+v4.0 的引擎规格（六、七节）直接调用了 `ruleTable.resolve(...)`/`ruleTable.outcomeKey(...)` 等方法，但没有给出正式的协议定义，这里补全：
 
 ```swift
 /// 每个 CardType 提供一份遵循此协议的实现，封装"怎么查自己的规则表"这件事，
@@ -746,7 +689,7 @@ protocol ReviewRouteTable {
 /// 四、4.3），复习引擎需要跟学习引擎一样，能识别"这次结果不是终态，需要再问一轮、
 /// 再查一次表"。ReviewEngine.run 处理这个 case 的方式与 LearningEngine.process
 /// 的 resolveWithFollowUp 完全同构（见七），不重复定义一套单独的处理逻辑，只是
-/// 复习侧的循环结构本身就是 while true，直接在循环内展开这次追加交互即可，
+/// 复习侧的循环结构本身就是持续推进，直接在循环内展开这次追加交互即可，
 /// 不需要像学习引擎那样额外抽一个递归辅助方法。
 enum ReviewRouteTarget<FinishedPayload> {
     case step(StepID)
@@ -762,9 +705,66 @@ enum ReviewRouteTarget<FinishedPayload> {
 
 ## 六、学习引擎：Step 槽位传送带（调度机制不变，路由判断改为查表）
 
-### 6.1 StepSlot / 槽位处理阈值 / LearningSlotChain（与 v3.0 相同，不重复列出）
+### 6.1 StepSlot / 槽位处理阈值 / LearningSlotChain（补全，此前只写"与 v3.0 相同不重复列出"）
 
-`StepSlot`、`shouldProcess(slot:stepID:nonThresholdStepIDs:)`、`LearningSlotChain` 的定义与 v3.0 完全一致——传送带的调度机制（指针怎么移动、什么时候停下处理、"≥2才处理"与"非空即处理"两条规则并存）本次不受影响，只字未改。
+`StepSlot`、`shouldProcess`、`LearningSlotChain` 自 v1.0 起就被 `Unit.learningSlots` 和六、6.3 的调度规格使用，但历次改版只写"与 v3.0 相同，不重复列出"，从未在当前版本文档正文出现过。这里按本文档其余各处的实际调用补全声明，不改变既有调度行为。
+
+```swift
+struct StepSlot {
+    let stepID: StepID
+    init(stepID: StepID)
+    func peekFirst() -> UUID?
+    func enqueue(_ cardID: UUID)
+    func dequeue() -> UUID?
+    func remove(_ cardID: UUID)
+    var count: Int { get }
+}
+
+struct LearningSlotChain {
+    var slots: [StepID: StepSlot]
+    var orderedStepIDs: [StepID]
+    var nonThresholdStepIDs: Set<StepID>
+    var currentStepID: StepID
+    var totalCardCount: Int { get }
+    init(cardType: CardType)
+    func advancePointer()
+    func removeCompletedCard(_ cardID: UUID, from stepID: StepID)
+    func moveCard(_ cardID: UUID, from: StepID, to: StepID)
+    func enqueueFullRelearn(_ cardID: UUID, atStepID: StepID)
+}
+
+func shouldProcess(slot: StepSlot, stepID: StepID, nonThresholdStepIDs: Set<StepID>) -> Bool
+```
+
+**`StepSlot`**：学习传送带上某一个 Step 位置当前排队的卡片队列。
+
+- **存什么**：该槽位排队中的卡片 ID，先进先出。`stepID` 标明这个槽位对应哪一步。
+- **`init(stepID:)`**：建一个空队列。引擎在 `slots[stepID]` 缺失时用 `StepSlot(stepID:)` 视为空槽位。
+- **`peekFirst()`**：看队首 ID，不移除；空队列返回 nil。引擎用它判断"这个槽位有没有卡可以处理"。
+- **`enqueue` / `dequeue`**：入队、出队。编码阶段可按 Swift 队列惯用法命名，但必须能完成这两类操作。
+- **`remove(_:)`**：按 ID 从本槽位移除一张卡（`process` 里 `fetchCard` 失败时会用到）。
+- **`count`**：本槽位排队张数，供 `shouldProcess` 的阈值判断使用。
+
+**`LearningSlotChain`**：一个 Unit 的整条学习传送带。
+
+- **`slots`**：每个 StepID 对应的槽位；尚未有卡到达过的 Step 视为空槽位。
+- **`orderedStepIDs`**：槽位链的物理顺序，指针沿这个数组移动。**可变**——`LearningStepFactory.buildSequence` 组装出的顺序，在学习会话开始且当前链为空时写入这里。
+- **`nonThresholdStepIDs`**：同样来自 `LearningStepSequence`，会话开始时一并写入。标记哪些 Step 是"非空即处理"，其余走默认阈值。
+- **`currentStepID`**：指针当前指向的槽位。
+- **`totalCardCount`**：链上所有槽位排队中的卡片总数（`Unit.learningCount` 用它）。
+- **`init(cardType:)`**：按 CardType 建一条空链（`orderedStepIDs` / `nonThresholdStepIDs` 留空，等会话开始由 Factory 填入）。
+- **`advancePointer()`**：把指针移到 `orderedStepIDs` 中的下一个位置；到末尾后回到开头（传送带循环）。
+- **`removeCompletedCard(_:from:)`**：把指定卡片从指定 Step 槽位拿掉（学完跳出传送带，见单词卡文档"标熟"）。
+- **`moveCard(_:from:to:)`**：把一张卡从当前槽位挪到目标槽位（查表结果为 `.step` 时）。
+- **`enqueueFullRelearn(_:atStepID:)`**：完整重学入队——把卡放进指定入口 Step 的槽位（见八）。
+
+**`shouldProcess(slot:stepID:nonThresholdStepIDs:)`**
+
+- **做什么**：指针停在某个槽位时，判断该处理队首，还是直接 `advancePointer()` 跳过。
+- **输入**：当前槽位、该槽位的 StepID、本链的非阈值 Step 集合。
+- **输出**：布尔值。
+- **规则**：若 `stepID` 属于 `nonThresholdStepIDs`，槽位非空就处理（非空即处理）。否则（默认阈值型）槽位张数达到阈值才处理；阈值默认 2，未达标则跳过。阈值是否做成可配置项留给编码阶段。
+- **注意事项**：阈值型用来制造间隔，非阈值型（例如流程末端收尾）来一张处理一张。产品动机见架构设计文档。
 
 ### 6.2 基础类型：`StepID` / `PromptContent` / `ChecklistItem`（补全，此前只被引用从未正式声明）
 
@@ -836,12 +836,10 @@ final class LearningEngine {
     /// 而增加一份持久化状态的复杂度。
     private var completedInSession: Int = 0
 
-    init(unit: Unit) {
-        self.unit = unit
-    }
+    init(unit: Unit)
 
     /// v4.1：step()/process() 改为对 RouteTable 关联类型使用泛型约束（而不是 any LearningRouteTable
-    /// 存在型），因为 process 内部需要直接 switch RouteTarget<FinishedPayload> 的 case，
+    /// 存在型），因为 process 内部需要直接识别 RouteTarget<FinishedPayload> 的 case，
     /// 存在型会丢失这个具体类型信息，泛型能保留。调用方在实例化时传入具体的 RouteTable 实现
     /// （如 WordCardLearningRouteTable），编译期就能确定 FinishedPayload 具体是什么类型。
     ///
@@ -851,159 +849,31 @@ final class LearningEngine {
     /// 一张正在进行中的卡——因为只有 .finished 分支才会做这个判断，卡片答错排队、
     /// 推进到下一个 Step 都不受影响，可以正常继续。
     func step<Table: LearningRouteTable>(factory: any LearningStepFactory, settings: AppSettings,
-                                          ruleTable: Table, on renderer: StepRenderer) async -> LearningStepResult {
-        guard let unit else { return .chainEmpty }
-
-        let sequence = factory.buildSequence(for: unit.cardType, settings: settings)
-        if unit.learningSlots.orderedStepIDs.isEmpty {
-            unit.learningSlots.orderedStepIDs = sequence.orderedStepIDs
-            unit.learningSlots.nonThresholdStepIDs = sequence.nonThresholdStepIDs
-        }
-
-        var loopGuard = 0
-        while loopGuard < unit.learningSlots.orderedStepIDs.count {
-            loopGuard += 1
-
-            let stepID = unit.learningSlots.currentStepID
-            let slot = unit.learningSlots.slots[stepID] ?? StepSlot(stepID: stepID)
-
-            guard shouldProcess(slot: slot, stepID: stepID, nonThresholdStepIDs: unit.learningSlots.nonThresholdStepIDs),
-                  let cardID = slot.peekFirst() else {
-                unit.learningSlots.advancePointer()
-                continue
-            }
-
-            let result = await process(cardID: cardID, stepID: stepID, sequence: sequence,
-                                        ruleTable: ruleTable, unit: unit, renderer: renderer, settings: settings)
-
-            if case .cardCompleted = result {
-                completedInSession += 1
-                let goal = unit.resolvedLearningGoal(settings: settings)
-                if completedInSession >= goal {
-                    return .sessionGoalReached(completedCount: completedInSession, cardID: extractCardID(from: result))
-                }
-            }
-            return result
-        }
-
-        return .chainEmpty
-    }
+                                          ruleTable: Table, on renderer: StepRenderer) async -> LearningStepResult
 
     /// 会话结束（用户点"返回本子首页"或本身正常收尾）时调用，重置计数，
     /// 供"再学一轮"或下次重新进入学习界面时重新开始计数
-    func resetSessionCount() {
-        completedInSession = 0
-    }
+    func resetSessionCount()
 
-    private func extractCardID(from result: LearningStepResult) -> UUID {
-        guard case .cardCompleted(let cardID) = result else {
-            fatalError("extractCardID 只应在 result 是 .cardCompleted 时被调用")
-        }
-        return cardID
-    }
+    private func extractCardID(from result: LearningStepResult) -> UUID
 
     private func process<Table: LearningRouteTable>(cardID: UUID, stepID: StepID, sequence: LearningStepSequence,
-                                                      ruleTable: Table, unit: Unit, renderer: StepRenderer, settings: AppSettings) async -> LearningStepResult {
-        guard let card = fetchCard(id: cardID, unit: unit) else {
-            unit.learningSlots.slots[stepID]?.remove(cardID)
-            return .chainEmpty
-        }
-        guard let step = sequence.steps[stepID] else { fatalError("槽位物理顺序里的 StepID 没有对应的 Step 定义") }
-        guard var progress = fetchLearningProgress(cardID: cardID) else {
-            fatalError("正在学习中的卡必须有对应的 LearningProgress，数据不一致")
-        }
-
-        // 判定 + 查表，支持 stepWithFollowUp 的连续查表（见 resolveWithFollowUp）
-        let (resolved, updatedProgress) = await resolveWithFollowUp(
-            step: step, stepID: stepID, progress: progress, ruleTable: ruleTable, renderer: renderer, settings: settings
-        )
-        progress = updatedProgress
-
-        switch resolved.target {
-        case .finished(let payload):
-            // v4.1：FinishedPayload 现在约束为 FSRSRatingConvertible（见二、五、5.7），
-            // 直接调用 .fsrsRating 拿到 FSRSRating，编译期保证类型安全，
-            // 不再需要运行时强转（取代了此前的 `payload as! FSRSRating` 写法）。
-            // v4.6：initialize 新增 desiredRetention 参数（二），从卡片所属 unit 读取
-            FSRSEngine.initialize(&card.fsrs, rating: payload.fsrsRating, desiredRetention: unit.desiredRetention)
-            unit.learningSlots.removeCompletedCard(cardID, from: stepID)
-            card.originQueue = nil
-            clearLearningProgress(cardID: cardID)
-            unit.learningSlots.advancePointer()
-            return .cardCompleted(cardID: cardID)
-
-        case .step(let targetStepID):
-            await presentSignal(resolved.signal, card: card, step: step, renderer: renderer)
-
-            unit.learningSlots.moveCard(cardID, from: stepID, to: targetStepID)
-            progress.currentStepID = targetStepID
-            saveLearningProgress(progress)
-            unit.learningSlots.advancePointer()
-
-            return resolved.signal == .none
-                ? .cardAdvanced(cardID: cardID, from: stepID, to: targetStepID)
-                : .cardFailed(cardID: cardID, atStep: targetStepID)
-
-        case .stepWithFollowUp:
-            // resolveWithFollowUp 内部已经把这种情况处理掉、递归查到了真正的终态结果，
-            // 正常流程不应该在这里再看到这个 case——出现即视为规则表设计错误
-            fatalError("stepWithFollowUp 应已被 resolveWithFollowUp 消化，不应该到达这里")
-        }
-    }
+                                                      ruleTable: Table, unit: Unit, renderer: StepRenderer, settings: AppSettings) async -> LearningStepResult
 
     /// v4.1：处理"判定→查表→如果是stepWithFollowUp则再问一轮→再查表"的完整循环。
     /// 因为 RouteTarget<FinishedPayload> 现在是真正的泛型类型（不是 Any），
-    /// 这里可以直接 switch，不再需要额外的协议或提取方法。
+    /// 这里可以直接识别 case，不再需要额外的协议或提取方法。
     /// 递归深度理论上应该很浅（目前唯一用例 Step0 只需要一轮 followUp），
     /// 但仍加一个保护上限，避免规则表设计错误导致无限循环。
     private func resolveWithFollowUp<Table: LearningRouteTable>(
         step: Step, stepID: StepID, progress: LearningProgress, ruleTable: Table, renderer: StepRenderer, settings: AppSettings, depth: Int = 0
-    ) async -> (resolved: (target: RouteTarget<Table.FinishedPayload>, signal: FailureSignal), progress: LearningProgress) {
-        guard depth < 5 else { fatalError("stepWithFollowUp 递归层数异常，规则表可能存在设计错误") }
+    ) async -> (resolved: (target: RouteTarget<Table.FinishedPayload>, signal: FailureSignal), progress: LearningProgress)
 
-        let input = await renderer.present(step)
-        let result = EngineJudge.evaluate(action: step.action, input: input)
-        let outcomeKey = ruleTable.outcomeKey(from: result)
-
-        // v4.3：resolve 补上 settings 参数（见五、5.7 说明），这里的 settings
-        // 是 process(...) 已经持有的同一份，顺手往下传，不引入新的依赖来源。
-        guard let resolved = ruleTable.resolve(step: stepID, outcome: outcomeKey, progress: progress, settings: settings) else {
-            fatalError("规则表未能匹配到任何行，说明该 CardType 的规则表存在遗漏，需要补充")
-        }
-        let updatedProgress = ruleTable.updateProgress(progress, step: stepID, outcome: outcomeKey)
-
-        if case .stepWithFollowUp(let followUpStep) = resolved.target {
-            return await resolveWithFollowUp(step: followUpStep, stepID: stepID, progress: updatedProgress,
-                                              ruleTable: ruleTable, renderer: renderer, depth: depth + 1)
-        }
-
-        return (resolved, updatedProgress)
-    }
-
-    private func presentSignal(_ signal: FailureSignal, card: any Card, step: Step, renderer: StepRenderer) async {
-        switch signal {
-        case .none:
-            break
-        case .lightHint:
-            await renderer.presentLightweightFailureHint()
-        case .detailPage:
-            let detail = card.fullDetailContent()
-            await renderer.presentDetailInterrupt(detail, highlight: step.highlightSectionID)
-        }
-    }
-
-    private func fetchCard(id: UUID, unit: Unit) -> (any Card)? {
-        fatalError("依赖 SwiftData ModelContext 查询，此处留空")
-    }
-    private func fetchLearningProgress(cardID: UUID) -> LearningProgress? {
-        fatalError("依赖具体持久化实现查询，此处留空")
-    }
-    private func saveLearningProgress(_ progress: LearningProgress) {
-        fatalError("依赖具体持久化实现写入，此处留空")
-    }
-    private func clearLearningProgress(cardID: UUID) {
-        fatalError("依赖具体持久化实现删除，此处留空")
-    }
+    private func presentSignal(_ signal: FailureSignal, card: any Card, step: Step, renderer: StepRenderer) async
+    private func fetchCard(id: UUID, unit: Unit) -> (any Card)?
+    private func fetchLearningProgress(cardID: UUID) -> LearningProgress?
+    private func saveLearningProgress(_ progress: LearningProgress)
+    private func clearLearningProgress(cardID: UUID)
 }
 
 enum LearningStepResult {
@@ -1020,17 +890,112 @@ enum LearningStepResult {
 }
 ```
 
+#### `init(unit:)`
+
+- **做什么**：把引擎绑到某个 Unit（弱引用，避免与 Unit 上的 `@Transient lazy` 引擎字段互相强持有）。
+- **输入**：所属 `Unit`。
+- **输出/副作用**：`completedInSession` 从 0 开始。
+
+#### `step(factory:settings:ruleTable:on:)`
+
+- **做什么**：处理传送带上"下一次该处理的那一次交互"。不知道"这一轮学习会话"的存在；会话目标只通过返回 `.sessionGoalReached` 通知调用方。
+- **输入**：`LearningStepFactory`、`AppSettings`、具体的 `LearningRouteTable` 实现、`StepRenderer`。
+- **输出**：一个 `LearningStepResult`。
+- **步骤**：
+  1. 若 `unit` 已释放，返回 `.chainEmpty`。
+  2. 用 `factory.buildSequence(for: unit.cardType, settings:)` 得到物理槽位链模板。
+  3. 若当前 `unit.learningSlots.orderedStepIDs` 为空（会话开始且链尚未定型），把模板的 `orderedStepIDs` 与 `nonThresholdStepIDs` 写入链上。
+  4. 沿传送带扫描，扫描次数上限为当前 `orderedStepIDs.count`（防止空转死循环）：
+     - 取指针所在 `currentStepID` 对应槽位；没有则视为空的 `StepSlot(stepID:)`。
+     - 若 `shouldProcess` 为假，或队首没有卡：`advancePointer()`，继续扫下一个槽位。
+     - 否则调用 `process(...)` 处理队首那张卡。
+     - 若结果是 `.cardCompleted`：`completedInSession` 加 1；用 `unit.resolvedLearningGoal(settings:)` 得到本轮目标；若已学完数 ≥ 目标，返回 `.sessionGoalReached(completedCount:cardID:)`（`cardID` 由 `extractCardID` 从这次 `.cardCompleted` 取出）。未达标则直接把这次 `.cardCompleted` 返回给调用方。
+     - 其他结果（推进、失败、空链等）立刻返回，不再继续扫槽位。
+  5. 扫完整圈仍没有可处理的卡，返回 `.chainEmpty`。
+- **注意事项**：达标检查只发生在"一张卡已经学完"之后，不会打断半路上的卡。`desiredRetention` 不在本方法里使用，学完初始化 FSRS 发生在 `process` 的 `.finished` 分支。
+
+#### `resetSessionCount()`
+
+- **做什么**：把 `completedInSession` 清零。
+- **输入**：无。
+- **输出/副作用**：仅改内存计数。用户点"再学一轮"或下次重新进入学习界面前，由调用方调用。
+
+#### `extractCardID(from:)`
+
+- **做什么**：从 `.cardCompleted` 结果里取出 `cardID`，供 `.sessionGoalReached` 携带。
+- **输入**：必须已经是 `.cardCompleted` 的 `LearningStepResult`。
+- **输出**：该卡 UUID。
+- **注意事项**：在其他 case 上调用视为编程错误。
+
+#### `process(...)`
+
+- **做什么**：对传送带队首的一张卡，完成"展示 → 判定 → 查表（含 follow-up）→ 按去向改槽位/FSRS/进度"这一整步。
+- **输入**：`cardID`、当前槽位 `stepID`、`sequence`、规则表、所属 `unit`、渲染器、`settings`。
+- **输出**：`LearningStepResult`。
+- **步骤**：
+  1. `fetchCard`：找不到这张卡时，从当前槽位移除该 `cardID`，返回 `.chainEmpty`。
+  2. 从 `sequence.steps[stepID]` 取 Step 定义；没有对应定义视为编程错误（槽位物理顺序与 Step 表不一致）。
+  3. `fetchLearningProgress`：正在学习中的卡必须已有进度；没有视为数据不一致（编程/持久化错误）。
+  4. 调用 `resolveWithFollowUp`（传入同一份 `settings`），得到终态 `(target, signal)` 与更新后的 `LearningProgress`。
+  5. 按 `target` 分支：
+     - **`.finished(payload)`**：用 `payload.fsrsRating`（`FSRSRatingConvertible`，编译期保证，不再 `as! FSRSRating`）和 `unit.desiredRetention` 调用 `FSRSEngine.initialize`（v4.6 起签名含 `desiredRetention`，从卡片所属 unit 读取）；`removeCompletedCard` 从当前槽位拿掉该卡；`card.originQueue = nil`；`clearLearningProgress`；`advancePointer()`；返回 `.cardCompleted`。**本分支不调用 `presentSignal`。**
+     - **`.step(targetStepID)`**：先 `presentSignal`；把卡从当前槽位挪到目标槽位（`moveCard`）；`progress.currentStepID = targetStepID` 并 `saveLearningProgress`；`advancePointer()`。若 `signal == .none` 返回 `.cardAdvanced`，否则返回 `.cardFailed(atStep: targetStepID)`。
+     - **`.stepWithFollowUp`**：正常流程不应再看到——`resolveWithFollowUp` 内部必须已消化到终态；出现即视为规则表设计错误。
+- **注意事项**：`.finished` 使用 `initialize` 而不是 `update`（学习流程首次进入 FSRS）。写盘发生在 `.step` 分支（每次推进都保存进度）；`.finished` 是清除进度而不是再写一份。
+
+#### `resolveWithFollowUp(...)`
+
+- **做什么**：判定 → 查表 → 若是 follow-up 再问一轮再查表，直到得到非 `.stepWithFollowUp` 的终态。
+- **输入**：当前展示用的 `Step`、查表用的原 `stepID`（follow-up 再查时仍用原 Step 的 ID，不用 follow-up Step 自己的 id）、当前 `LearningProgress`、规则表、渲染器、`settings`、递归深度（默认 0）。
+- **输出**：终态 `(target, signal)` 以及规则表 `updateProgress` 之后的进度。
+- **步骤**：
+  1. 深度 ≥ 5：视为规则表设计错误（防止无限循环）。目前唯一用例（Step0 一轮检查页）深度很浅。
+  2. `renderer.present(step)` 得到 `ActionInput`；`EngineJudge.evaluate` 得到 `ActionResult`；`ruleTable.outcomeKey(from:)` 得到查表用 outcome。
+  3. `ruleTable.resolve(step:outcome:progress:settings:)`；匹配不到任何行视为该 CardType 规则表遗漏。
+  4. `ruleTable.updateProgress` 得到更新后的进度。
+  5. 若 target 是 `.stepWithFollowUp(followUpStep)`：用 `followUpStep` 作为下一步要展示的 Step，**查表键仍是原来的 `stepID`**，进度换成更新后的，深度 +1，递归；递归时必须继续传入同一份 `settings`（是 `process` 已经持有的同一份，不引入新的依赖来源）。
+  6. 否则返回当前 resolved 与更新后进度。
+
+#### `presentSignal`
+
+- **做什么**：按规则表给出的失败反馈程度打扰用户（在执行"去向"之前，见 5.6）。
+- **输入**：`FailureSignal`、当前卡、当前 Step、渲染器。
+- **输出/副作用**：
+  - `.none`：什么都不做。
+  - `.lightHint`：调用 `renderer.presentLightweightFailureHint()`。
+  - `.detailPage`：`card.fullDetailContent()` 后调用 `presentDetailInterrupt`，高亮 `step.highlightSectionID`。
+
+#### `fetchCard` / `fetchLearningProgress` / `saveLearningProgress` / `clearLearningProgress`
+
+- **做什么**：读卡、读/写/删 `LearningProgress`。
+- **注意事项**：依赖 SwiftData 或其他持久化方案，本文档留空，见十四节第 2 条。写盘原则：每次 `.step` 推进都保存；学完则清除。
+
 ---
 
 ## 七、复习流程：ReviewEngine（调度节奏不变，路由判断改为查表）
+
+### 7.0 `ReviewStepFactory`（补全，此前只被引用从未正式声明）
+
+`ReviewEngine.run`/`resolveWithFollowUp`（下方）签名里一直使用 `any ReviewStepFactory`，但协议本身此前从未在文档正文声明过——`LearningStepFactory`（六、6.2）有对应声明，其复习侧版本被漏掉了。根据 `WordCardReviewStepFactory`（husk-word-card-code.md 五）的实际实现（`startStepID(for:)`、`buildStep(id:for:)`）补全，与 `LearningStepFactory` 结构对称：
+
+```swift
+/// 复习流程对应 LearningStepFactory 的角色：只负责"给定 CardType，
+/// 复习该从哪个 StepID 开始""给定 StepID，组装出对应的 Step"，
+/// 不承担任何路由判断（路由统一交给 ReviewRouteRule，见五）。
+protocol ReviewStepFactory {
+    func startStepID(for cardType: CardType) -> StepID
+    func buildStep(id: StepID, for cardType: CardType) -> Step
+}
+```
+
+- **`startStepID(for:)`**：复习会话第一次创建时（`run` 里 `fetchReviewSession` 查不到记录），用这个方法得到初始 `currentStepID`。
+- **`buildStep(id:for:)`**：复习循环每一轮都用当前 `session.currentStepID` 调用这个方法，拿到该展示的具体 `Step`。
 
 ```swift
 final class ReviewEngine {
     private weak var unit: Unit?
 
-    init(unit: Unit) {
-        self.unit = unit
-    }
+    init(unit: Unit)
 
     /// v4.1：与 LearningEngine.step 同理，改为对 Table: ReviewRouteTable 使用泛型约束
     /// （而不是 any ReviewRouteTable 存在型），因为需要保留 Table.FinishedPayload
@@ -1038,53 +1003,7 @@ final class ReviewEngine {
     // v4.3：补上 settings 参数，与 LearningEngine.step(factory:settings:...) 对齐
     // （见五、5.7 resolve 协议签名订正说明）。
     func run<Table: ReviewRouteTable>(card: any Card, factory: any ReviewStepFactory,
-                                       ruleTable: Table, on renderer: StepRenderer, settings: AppSettings) async {
-        guard let unit else { return }
-
-        // v4.1 修正：不再无条件 new 一个 session——先尝试读取这张卡是否已有一份
-        // 未完成的 ReviewSession（说明上次会话被中断过），有则从中断处继续；
-        // 没有则视为全新的复习会话，从 startStepID 开始并立即写盘，
-        // 确保接下来哪怕第一步就被中断，也已经有一份可恢复的记录。
-        var session = fetchReviewSession(cardID: card.id)
-            ?? ReviewSession(cardID: card.id, currentStepID: factory.startStepID(for: unit.cardType))
-        saveReviewSession(session)
-
-        while true {
-            let step = factory.buildStep(id: session.currentStepID, for: unit.cardType)
-
-            let (resolved, updatedSession) = await resolveWithFollowUp(
-                step: step, stepID: session.currentStepID, session: session,
-                ruleTable: ruleTable, factory: factory, renderer: renderer, settings: settings
-            )
-            session = updatedSession
-
-            switch resolved.target {
-            case .finished(let payload):
-                await presentSignal(resolved.signal, card: card, step: step, renderer: renderer)
-                // v4.6：update 新增 desiredRetention 参数（二），从卡片所属 unit 读取
-                FSRSEngine.update(&card.fsrs, rating: payload.fsrsRating, desiredRetention: unit.desiredRetention)   // 见二 FSRSRatingConvertible
-                card.postFSRSUpdateHook(context: session)
-                unit.removeFromReview(card)
-                clearReviewSession(cardID: card.id)   // 正常完成，清除持久化的 session
-                return
-
-            case .step(let nextStepID):
-                await presentSignal(resolved.signal, card: card, step: step, renderer: renderer)
-                session.currentStepID = nextStepID
-                saveReviewSession(session)   // 每次推进到下一步都写盘，确保中断后能从这一步续上
-
-            case .transferToFullRelearn:
-                await presentSignal(resolved.signal, card: card, step: step, renderer: renderer)
-                transitionToFullRelearn(card: card, unit: unit, session: session)
-                clearReviewSession(cardID: card.id)   // 已移交给学习引擎，复习会话本身结束，清除
-                return
-
-            case .stepWithFollowUp:
-                // resolveWithFollowUp 内部已消化，正常流程不应该在这里再看到这个 case
-                fatalError("stepWithFollowUp 应已被 resolveWithFollowUp 消化，不应该到达这里")
-            }
-        }
-    }
+                                       ruleTable: Table, on renderer: StepRenderer, settings: AppSettings) async
 
     /// 与 LearningEngine.resolveWithFollowUp（六、6.3）同构：处理"判定→查表→如果是
     /// stepWithFollowUp则再问一轮→再查表"的完整循环。单词型复习流程目前唯一的用例是
@@ -1093,55 +1012,64 @@ final class ReviewEngine {
     private func resolveWithFollowUp<Table: ReviewRouteTable>(
         step: Step, stepID: StepID, session: ReviewSession, ruleTable: Table,
         factory: any ReviewStepFactory, renderer: StepRenderer, settings: AppSettings, depth: Int = 0
-    ) async -> (resolved: (target: ReviewRouteTarget<Table.FinishedPayload>, signal: FailureSignal), session: ReviewSession) {
-        guard depth < 5 else { fatalError("stepWithFollowUp 递归层数异常，规则表可能存在设计错误") }
+    ) async -> (resolved: (target: ReviewRouteTarget<Table.FinishedPayload>, signal: FailureSignal), session: ReviewSession)
 
-        let input = await renderer.present(step)
-        let result = EngineJudge.evaluate(action: step.action, input: input)
-        let outcomeKey = ruleTable.outcomeKey(from: result)
-
-        // v4.3：resolve 补上 settings 参数（架构代码文档五、5.7 说明），
-        // 与 LearningEngine 侧同构（六、6.3）。
-        guard let resolved = ruleTable.resolve(step: stepID, outcome: outcomeKey, session: session, settings: settings) else {
-            fatalError("规则表未能匹配到任何行，说明该 CardType 的复习规则表存在遗漏")
-        }
-        let updatedSession = ruleTable.updateSession(session, step: stepID, outcome: outcomeKey)
-
-        if case .stepWithFollowUp(let followUpStep) = resolved.target {
-            return await resolveWithFollowUp(step: followUpStep, stepID: stepID, session: updatedSession,
-                                              ruleTable: ruleTable, factory: factory, renderer: renderer, depth: depth + 1)
-        }
-
-        return (resolved, updatedSession)
-    }
-
-    private func presentSignal(_ signal: FailureSignal, card: any Card, step: Step, renderer: StepRenderer) async {
-        switch signal {
-        case .none: break
-        case .lightHint: await renderer.presentLightweightFailureHint()
-        case .detailPage:
-            let detail = card.fullDetailContent()
-            await renderer.presentDetailInterrupt(detail, highlight: step.highlightSectionID)
-        }
-    }
-
-    private func fetchReviewSession(cardID: UUID) -> ReviewSession? {
-        fatalError("依赖具体持久化实现查询，此处留空，与 fetchLearningProgress 用同一套持久化机制")
-    }
-    private func saveReviewSession(_ session: ReviewSession) {
-        fatalError("依赖具体持久化实现写入，此处留空")
-    }
-    private func clearReviewSession(cardID: UUID) {
-        fatalError("依赖具体持久化实现删除，此处留空")
-    }
+    private func presentSignal(_ signal: FailureSignal, card: any Card, step: Step, renderer: StepRenderer) async
+    private func fetchReviewSession(cardID: UUID) -> ReviewSession?
+    private func saveReviewSession(_ session: ReviewSession)
+    private func clearReviewSession(cardID: UUID)
 }
 ```
 
-**写盘时机的选择**：每次成功推进到下一个 Step（`.step` 分支）就写一次盘，而不是等到整个复习会话结束才写——理由是复习流程只有两步（自测→拼写），写盘开销可以忽略，选择"更频繁、更安全"而不是"更少 I/O 但中断粒度更粗"。这跟 `LearningProgress` 的写盘策略（六、6.3 的 `process` 方法里，每次 `.step`/`.finished` 分支都会调用 `saveLearningProgress`）保持一致的原则。
+#### `init(unit:)`
+
+- **做什么**：弱引用所属 Unit。
+- **输入**：`Unit`。
+
+#### `run(card:factory:ruleTable:on:settings:)`
+
+- **做什么**：对**一张卡**跑完一次复习会话（调度节奏仍是单卡会话内自测→拼写等步骤连续推进，不走学习传送带）。
+- **输入**：要复习的卡、`ReviewStepFactory`、具体 `ReviewRouteTable`、渲染器、`AppSettings`。
+- **输出/副作用**：会话正常结束或转入完整重学后返回；中途每次推进都写盘。
+- **步骤**：
+  1. 若 `unit` 已释放，直接返回。
+  2. **恢复或新建 session**（v4.1）：先 `fetchReviewSession(cardID:)`；若有未完成记录则从中断处继续；没有则新建 `ReviewSession(cardID:currentStepID:)`，起点为 `factory.startStepID(for: unit.cardType)`。无论新旧，立刻 `saveReviewSession`，确保哪怕第一步就被中断也已有可恢复记录。不要无条件 new。
+  3. 循环直到会话结束：
+     - 用 `factory.buildStep(id: session.currentStepID, for: unit.cardType)` 得到当前 Step。
+     - `resolveWithFollowUp`（传入 `settings`）得到终态与更新后的 session。
+     - **`.finished(payload)`**：先 `presentSignal`；用 `payload.fsrsRating` 与 `unit.desiredRetention` 调用 `FSRSEngine.update`（不是 initialize；v4.6 起签名含 `desiredRetention`，从卡片所属 unit 读取）；`card.postFSRSUpdateHook(context: session)`；`unit.removeFromReview(card)`；`clearReviewSession`；结束。
+     - **`.step(nextStepID)`**：`presentSignal`；`session.currentStepID = nextStepID`；`saveReviewSession`（每次推进都写盘）；继续循环。
+     - **`.transferToFullRelearn`**：`presentSignal`；`transitionToFullRelearn(card:unit:session:entryStepID:)`（入槽步见第八节签名中的 `entryStepID`）；`clearReviewSession`；结束。
+     - **`.stepWithFollowUp`**：正常流程不应到达——应已被 `resolveWithFollowUp` 消化；出现即视为编程/规则表错误。
+- **注意事项**：复习学完走 `update` 而不是 `initialize`。学习引擎 `.finished` 不展示 signal，复习引擎 `.finished` **要**展示。`desiredRetention` 从卡片所属 `unit` 读取。
+
+#### `resolveWithFollowUp`（复习侧）
+
+- **做什么**：与学习侧同构的"判定→查表→follow-up 再问一轮→再查表"。
+- **输入**：当前 Step、查表用的原 `stepID`、当前 `ReviewSession`、规则表、factory、渲染器、`settings`、深度（默认 0）。
+- **输出**：终态 `(target, signal)` 与更新后的 session。
+- **步骤**：
+  1. 深度 ≥ 5：规则表可能存在设计错误。
+  2. present → `EngineJudge.evaluate` → `outcomeKey`。
+  3. `ruleTable.resolve(step:outcome:session:settings:)`；匹配不到视为该 CardType 复习规则表遗漏。
+  4. `ruleTable.updateSession`。
+  5. 若 `.stepWithFollowUp(followUpStep)`：用 follow-up Step 再递归，**查表键仍是原来的 `stepID`**，深度 +1，继续传入同一份 `settings`。
+  6. 否则返回当前 resolved 与更新后 session。
+- **注意事项**：单词型目前唯一用例是"认识（即时）→ 确认页"。
+
+#### `presentSignal`
+
+与学习引擎相同：`.none` 无操作；`.lightHint` 轻提示；`.detailPage` 用 `fullDetailContent` + `highlightSectionID` 打断展示。
+
+#### `fetchReviewSession` / `saveReviewSession` / `clearReviewSession`
+
+依赖具体持久化实现，与 `fetchLearningProgress` 用同一套机制，本文档留空（十四节第 2 条）。
+
+**写盘时机的选择**：每次成功推进到下一个 Step（`.step` 分支）就写一次盘，而不是等到整个复习会话结束才写——理由是复习流程只有两步（自测→拼写），写盘开销可以忽略，选择"更频繁、更安全"而不是"更少 I/O 但中断粒度更粗"。这跟 `LearningProgress` 的写盘策略（六、6.3 的 `process` 方法里，每次 `.step` 分支会调用 `saveLearningProgress`，`.finished` 则清除）保持一致的原则。
 
 **中断后的恢复体验**：本文档选择"无感恢复"——重新打开这张卡的复习时，`fetchReviewSession` 若查到未清除的记录，直接从 `currentStepID` 指示的那一步继续，不会额外弹出"是否继续上次复习"之类的确认对话框。这是因为复习会话很短（两步）、中断到恢复之间的用户心智负担很低，主动询问反而增加了不必要的交互成本；如果编码阶段发现这个假设不成立（比如实际体验下来用户会困惑"怎么直接跳到了拼写测试"），可以在渲染层加一个不打断流程的提示，不需要改动这里的引擎逻辑。
 
-**v4.0 变化**：`ReviewEngine` 不再持有 `stateKeyPath: ReferenceWritableKeyPath<Unit, EngineState>`——运行时状态现在是方法内的局部变量 `session: ReviewSession`，而不是挂在 `Unit` 上的一份持久化状态。这带来一个需要在编码阶段确认的取舍：**如果复习会话在中途被中断（切后台、关App），局部变量 `session` 会丢失**，之前 v1.0-v3.0 的 `EngineState` 是持久化的，能在中断后恢复。v4.0 的 `ReviewSession` 虽然类型定义上标了 `Codable`（三、3.2），但上面这段 `run` 方法的示例代码并没有在每次循环时把它写盘、也没有在方法开头尝试恢复一个已存在的 session——这是本文档遗留的一个需要修正的实现细节，见十一。
+**v4.0 变化**：`ReviewEngine` 不再持有 `stateKeyPath: ReferenceWritableKeyPath<Unit, EngineState>`——运行时状态现在是方法内的 `session: ReviewSession`，而不是挂在 `Unit` 上的一份持久化状态。这带来一个需要在编码阶段确认的取舍：**如果复习会话在中途被中断（切后台、关App），仅作为局部变量的 `session` 会丢失**，之前 v1.0-v3.0 的 `EngineState` 是持久化的，能在中断后恢复。v4.0 的 `ReviewSession` 虽然类型定义上标了 `Codable`（三、3.2），但早期规格曾把它当纯局部变量、没有在每次循环写盘、也没有在方法开头尝试恢复——这是本文档遗留过的一个实现细节。**v4.1 已解决**（见十四节"已解决问题"：会话开始 `fetchReviewSession`，每次 `.step` 写盘，正常结束/转入完整重学时清除）。
 
 ### 7.x 到期卡定时入队（v4.8 新增）
 
@@ -1157,26 +1085,34 @@ enum DueCardScheduler {
     /// 触发时机：编码阶段确认，候选方案包括 App 进入前台时跑一次、
     /// 或注册一个后台任务（BGTaskScheduler）在系统允许的时机跑。
     /// 两者不互斥，可以都加，谁先触发都行——这个任务是幂等的，
-    /// 重复调用不会导致重复入队（见下方 guard）。
-    static func run(units: [Unit], now: Date = .now) {
-        for unit in units {
-            for card in fetchGraduatedCards(unitID: unit.id) {
-                guard card.isGraduated else { continue }  // 双重确认，防御性检查
-                guard let due = card.fsrs.dueDate, due <= now else { continue }
-                unit.requeueToReview(card)
-            }
-        }
-    }
+    /// 重复调用不会导致重复入队。
+    static func run(units: [Unit], now: Date = .now)
 
     /// 查询"这个 Unit 下 originQueue == nil 的卡"，具体实现依赖持久化方案
-    /// （SwiftData 的话大概率是一条 Predicate 查询），此处留空。
-    /// 注意：不能查询 unit.reviewQueue ∪ unit.learningSlots 之外的全集再过滤，
-    /// 那意味着要把所有卡都载入内存；应该直接按 originQueue == nil 查询。
-    private static func fetchGraduatedCards(unitID: UUID) -> [any Card] {
-        fatalError("依赖具体持久化实现查询，此处留空")
-    }
+    /// （SwiftData 的话大概率是一条 Predicate 查询）。
+    private static func fetchGraduatedCards(unitID: UUID) -> [any Card]
 }
 ```
+
+#### `DueCardScheduler.run(units:now:)`
+
+- **做什么**：扫描所有传入 Unit 里已毕业且到期的卡，调用 `Unit.requeueToReview` 放进复习队列。
+- **输入**：当前要扫描的 `units`；`now` 默认当前时刻，便于测试注入。
+- **输出/副作用**：对每张命中的卡调用一次 `unit.requeueToReview(card)`；不做 FSRS 计算。
+- **步骤**：
+  1. 遍历每个 `unit`。
+  2. 对该 Unit 调用 `fetchGraduatedCards(unitID:)`，拿到 `originQueue == nil` 的卡。
+  3. 对每张卡做防御性确认：`card.isGraduated` 为假则跳过。
+  4. 若 `card.fsrs.dueDate` 为空，或 `due > now`，跳过。
+  5. 否则 `unit.requeueToReview(card)`。
+- **注意事项**：学习流程内的卡（`.newCards` / `.fullRelearn`）完全不归这个任务管。
+
+#### `fetchGraduatedCards(unitID:)`
+
+- **做什么**：查出该 Unit 下已毕业的卡。
+- **输入**：`unitID`。
+- **输出**：`originQueue == nil` 的卡片列表。
+- **注意事项**：不能查询 `unit.reviewQueue ∪ unit.learningSlots` 之外的全集再在内存里过滤，那意味着要把所有卡都载入内存；应该直接按 `originQueue == nil` 查询。依赖具体持久化方案，本文档留空。
 
 **幂等性**：`requeueToReview` 内部先 `removeFromReview` 再 `append`（四），所以同一张卡被重复排查到也不会在 `reviewQueue` 里出现两次，`DueCardScheduler.run` 可以被安全地多次调用（比如用户短时间内多次打开 App），不需要额外加锁或去重逻辑。
 
@@ -1189,15 +1125,18 @@ enum DueCardScheduler {
 ## 八、完整重学：从复习流程移交给学习引擎
 
 ```swift
-func transitionToFullRelearn(card: any Card, unit: Unit, session: ReviewSession, entryStepID: StepID) {
-    unit.removeFromReview(card)
-    card.originQueue = .fullRelearn
-    unit.learningSlots.enqueueFullRelearn(card.id, atStepID: entryStepID)
-
-    let progress = LearningProgress(cardID: card.id, currentStepID: entryStepID)
-    saveLearningProgress(progress)   // 具体持久化实现见六、6.3 的占位说明
-}
+func transitionToFullRelearn(card: any Card, unit: Unit, session: ReviewSession, entryStepID: StepID)
 ```
+
+- **做什么**：复习判定需要完整重学时，把这张卡从复习队列交给学习传送带，并建立一份可恢复的 `LearningProgress`。
+- **输入**：卡、所属 Unit、当前复习 `session`、入学习链的 `entryStepID`。
+- **输出/副作用**（按此顺序）：
+  1. `unit.removeFromReview(card)`（卡离开复习队列，`originQueue` 先被置 nil）。
+  2. `card.originQueue = .fullRelearn`。
+  3. `unit.learningSlots.enqueueFullRelearn(card.id, atStepID: entryStepID)`。
+  4. 新建 `LearningProgress(cardID:currentStepID:)`，`currentStepID` 为 `entryStepID`。
+  5. `saveLearningProgress`（与六、6.3 同一套持久化）。
+- **注意事项**：`session` 本身由调用方在移交后 `clearReviewSession` 清除（见七 `.transferToFullRelearn` 分支）。复习会话到此结束，不再带到学习引擎。
 
 ---
 
@@ -1215,18 +1154,16 @@ enum QuickCaptureFlow {
 /// 捕获时归属 Unit 的三态判断（见 husk-architecture-design.md 第四节的理由）：
 /// 该类型下没有 Unit → 引导新建；只有一个 → 不弹，直接归入；有多个 → 必须弹出选择，
 /// 不做静默的"默认 Unit"兜底。
-func quickCapture(cardType: CardType, existingUnits: [Unit]) -> QuickCaptureFlow {
-    let matching = existingUnits.filter { $0.cardType == cardType }
-    switch matching.count {
-    case 0:
-        return .promptCreateUnit(cardType: cardType)
-    case 1:
-        return .captureInto(matching[0])
-    default:
-        return .promptSelectUnit(candidates: matching)
-    }
-}
+func quickCapture(cardType: CardType, existingUnits: [Unit]) -> QuickCaptureFlow
 ```
+
+- **做什么**：决定随手记该归入哪个 Unit（只做归属判断，不创建卡片）。
+- **输入**：要捕获的 `cardType`、当前已有的全部 Unit 列表。
+- **输出**：三态之一。
+  1. 从 `existingUnits` 滤出 `cardType` 相同的集合。
+  2. 数量为 0 → `.promptCreateUnit(cardType:)`，引导新建。
+  3. 数量为 1 → `.captureInto` 那一个 Unit，不弹窗。
+  4. 数量 ≥ 2 → `.promptSelectUnit(candidates:)`，必须让用户选，不做静默默认 Unit。
 
 选定 Unit 后，具体把随手记内容写成一张 `Card` 并标记 `source = .quickCapture`、`isInInbox`（一、`Card` 扩展）为真，属于各 CardType 自己的构造逻辑，本节只覆盖"选哪个 Unit"这一层通用判断。
 
@@ -1248,32 +1185,29 @@ enum ReviewPrompt {
 
 ## 十一、AppSettings
 
-与 v1.0 基本相同，v4.2 新增一个字段：
+**本节补全说明**：`AppSettings` 自 v1.0 起就作为参数贯穿全文（`resolvedLearningGoal(settings:)`、`LearningRouteTable.resolve(...settings:)`、`ReviewRouteTable.resolve(...settings:)`、`LearningStepFactory.buildSequence(for:settings:)`、`LearningEngine.step(...settings:)`、`ReviewEngine.run(...settings:)` 等），但历次改版只写"与 v1.0 基本相同"，类型本体从未在正文出现。这里补上声明，不改变既有行为。
+
+`AppSettings` 是 App 级用户偏好容器，作为**显式参数**传给需要读设置的方法，不作为各处隐式访问的全局单例。具体存盘方式（`UserDefaults`、SwiftData 单例记录等）留给编码阶段。
 
 ```swift
-extension AppSettings {
+struct AppSettings {
     /// 单次学习目标的全局默认值。Unit 若未单独设置 dailyLearningGoal，
-    /// resolvedLearningGoal(settings:)（见四、Unit）会回退到这个值。
-    /// 具体默认数值（如 10）留给编码阶段结合实际测试的学习节奏确定，
-    /// 本文档不作硬性规定。
-    var defaultDailyLearningGoal: Int { /* 具体存取实现见 AppSettings 完整定义，此处仅示意新增字段 */ fatalError() }
+    /// resolvedLearningGoal(settings:)（见四）会回退到这个值。
+    /// 具体默认数字（如 10）留给编码阶段结合学习节奏确定，见十四第 5 条。
+    var defaultDailyLearningGoal: Int
 }
 ```
+
+架构层本体只放跨 CardType 通用字段（目前仅此一个）。某个 CardType 专属设置（例如单词型的 `definitionTestMode`，见 husk-word-card-code.md 二）用 `extension AppSettings` 补充，不写进这个本体。
+
+**为什么显式传参、不用全局单例**：签名上就能看出"这个方法依赖用户设置"；测试可以构造临时实例传入；单词卡文档曾因假定内部读单例而导致 `resolve` 缺 `settings` 参数，这类遗漏要避免再出现。
 
 ## 十二、删除 Unit：级联删除 + 前置确认
 
 ```swift
 enum UnitDeletion {
-    static func requestDeletion(for unit: Unit) -> DeletionConfirmation {
-        DeletionConfirmation(
-            unitName: unit.name,
-            cardCount: unit.learningSlots.totalCardCount + unit.reviewQueue.count
-        )
-    }
-
-    static func confirmDeletion(for unit: Unit, context: ModelContext) {
-        context.delete(unit)
-    }
+    static func requestDeletion(for unit: Unit) -> DeletionConfirmation
+    static func confirmDeletion(for unit: Unit, context: ModelContext)
 }
 
 struct DeletionConfirmation {
@@ -1282,36 +1216,21 @@ struct DeletionConfirmation {
 }
 ```
 
+- **`requestDeletion(for:)`**：为删除确认 UI 准备数据。输入是待删 Unit。输出 `DeletionConfirmation`：`unitName` 为 `unit.name`；`cardCount` 为 `unit.learningSlots.totalCardCount + unit.reviewQueue.count`（学习链上排队的卡 + 复习队列里的卡）。
+- **`confirmDeletion(for:context:)`**：用户确认后执行删除。输入是 Unit 与 SwiftData `ModelContext`。副作用：`context.delete(unit)`（级联删除细节留给建模阶段，本节只规定从 context 删除该 Unit）。
+
 ---
 
 ## 十三、单次学习目标（会话调用方视角）
 
 对应设计文档 6.3.1。本节说明 UI 层应该如何驱动 `LearningEngine.step`，配合十四的 `sessionGoalReached` 结果。
 
-```swift
-/// 示意性伪代码，展示调用方（ViewModel/View 层）如何驱动一轮学习会话，
-/// 不是本文档其余部分那种"接口签名"粒度，仅用于说明调用节奏。
-func runLearningSession(unit: Unit, factory: any LearningStepFactory, settings: AppSettings,
-                         ruleTable: some LearningRouteTable, renderer: StepRenderer) async {
-    while true {
-        let result = await unit.learningEngine.step(factory: factory, settings: settings,
-                                                       ruleTable: ruleTable, on: renderer)
-        switch result {
-        case .chainEmpty:
-            // 待学队列已耗尽（本身就没到目标数量），正常结束，无需汇总页的"达标"措辞，
-            // 可以复用同一个汇总页组件，只是文案上"已学 N 个"里 N 小于目标值
-            return
-        case .sessionGoalReached(let completedCount, _):
-            // 展示汇总页（设计文档 6.3.1），等待用户选择"返回首页"或"再学一轮"。
-            // 若选择"再学一轮"，调用方在再次进入循环前调用一次
-            // unit.learningEngine.resetSessionCount()，计数清零重新开始。
-            return
-        case .cardAdvanced, .cardCompleted, .cardFailed:
-            continue   // 正常推进，继续下一次 step() 调用
-        }
-    }
-}
-```
+调用方（ViewModel/View 层）驱动一轮学习会话的节奏如下——这是调用节奏说明，不是引擎内部实现。
+
+1. 循环调用 `unit.learningEngine.step(factory:settings:ruleTable:on:)`，每次只处理一次交互。
+2. 若返回 **`.chainEmpty`**：待学队列已耗尽（本身就没到目标数量），正常结束。无需汇总页的"达标"措辞；可以复用同一个汇总页组件，只是文案上"已学 N 个"里 N 小于目标值。结束本轮。
+3. 若返回 **`.sessionGoalReached(completedCount, _)`**：展示汇总页（设计文档 6.3.1），等待用户选择"返回首页"或"再学一轮"。若选择"再学一轮"，调用方在再次进入循环前调用一次 `unit.learningEngine.resetSessionCount()`，计数清零重新开始。本轮先结束。
+4. 若返回 **`.cardAdvanced` / `.cardCompleted` / `.cardFailed`**：正常推进，继续下一次 `step()`。
 
 **关键点**：`step()` 本身仍然是"处理一次交互"的粒度，不知道"这一轮学习会话"的存在——目标达成的判断被封装在 `LearningEngine` 内部的 `completedInSession` 计数里，`step()` 的返回值只是多了一种可能性（`.sessionGoalReached`），调用方据此决定要不要继续循环调用，职责边界依然清楚：引擎管"一步怎么处理"，调用方（UI层）管"什么时候该停、要不要开始新一轮"。
 
@@ -1324,12 +1243,11 @@ func runLearningSession(unit: Unit, factory: any LearningStepFactory, settings: 
 1. **`assertNoRouteRuleConflicts` 的具体比对算法**：五、5.2 只给了函数签名和调用时机，具体"如何判断两行条件互不矛盾"的算法留空，需要编码阶段实现。
 2. **`fetchCard`/`fetchLearningProgress`/`saveLearningProgress`/`clearLearningProgress`/`fetchReviewSession`/`saveReviewSession`/`clearReviewSession` 的具体实现**：均依赖 SwiftData 或其他持久化方案，本文档留空。
 3. **`any LearningTypeContext`/`any ReviewTypeContext` 的 `Codable` 落地**：与历次遗留问题相同，需要手写编解码 + 类型 tag 注册表。
-4. **`LearningEngine.step()`/`ReviewEngine.run()` 的调用节奏**：UI 层自行决定何时调用。**遗留一个缺口**：十三节给出了 `runLearningSession` 作为 `LearningEngine.step` 的调用方示意，但 `ReviewEngine.run` 目前没有对应的 `runReviewSession` 级别示意代码——本次给 `run` 补上 `settings` 参数后，这个缺失的调用方示意就成了唯一一处"`settings` 从哪里传进来"没有落地的地方。编码阶段需要照着 `runLearningSession` 的样子补一份 `runReviewSession`（或等价的调用方逻辑），确保 `settings` 有真实来源，而不是让 `run` 的 `settings` 参数变成一个没人真正传值的签名。
+4. **`LearningEngine.step()`/`ReviewEngine.run()` 的调用节奏**：UI 层自行决定何时调用。**遗留一个缺口**：十三节给出了学习会话调用节奏作为 `LearningEngine.step` 的调用方规格描述，但 `ReviewEngine.run` 目前没有对应的 `runReviewSession` 级别规格描述——本次给 `run` 补上 `settings` 参数后，这个缺失的调用方规格就成了唯一一处"`settings` 从哪里传进来"没有落地的地方。编码阶段需要照着学习会话调用节奏补一份 `runReviewSession`（或等价的调用方逻辑），确保 `settings` 有真实来源，而不是让 `run` 的 `settings` 参数变成一个没人真正传值的签名。
 5. **`AppSettings.defaultDailyLearningGoal` 的具体默认数值**：v4.2 只定义了字段存在，没有规定默认值该是多少（比如 10 或其他），需要结合实际学习节奏测试后确定，属于产品参数调优而非架构决策。
-6. **六、6.3 的 `process` 方法与七、`ReviewEngine.run` 里调用 `FSRSEngine.initialize`/`.update` 的地方，需要补上 `desiredRetention` 参数**：v4.6 给这两个方法的签名加上了 `desiredRetention: Double`（二），但本文档六、七两节示例代码里实际的调用点还是旧签名，需要编码阶段同步改成"先由 `card.unitID` 查到所属 `Unit`，取其 `desiredRetention` 再传入"。
-7. **`Unit.masteredStabilityThreshold`（四）与 `FSRSEngine.nextInterval`（二）里的 `factor`/`decay` 是两份独立字面量**：v4.8 已经让两处公式同源（都基于同一条 FSRS-5 曲线反解），但常量本身还没有共享定义——编码阶段应该把 `factor`/`decay` 从 `FSRSEngine` 的 `private` 提升为可被 `Unit` 访问的可见性（如 `internal static let`），让 `masteredStabilityThreshold` 直接引用，而不是各自维护一份数值相同的字面量，避免未来任何一次曲线参数调整时忘记同步另一处。
-8. **`DueCardScheduler`（七、7.x）的触发时机与持久化查询**：`fetchGraduatedCards` 依赖具体持久化方案实现按 `originQueue == nil` 的查询，本文档留空；触发时机是"App 进入前台时跑一次"还是引入 `BGAppRefreshTask` 之类的后台任务，取决于对到期延迟的产品要求，需要编码阶段结合实际测试确定。
-9. **`FSRSEngine.nextInterval` 的 `desiredRetention` clamp 范围 `[0.70, 0.99]`（二）是防御性兜底值，不是产品允许范围**：产品层面仍然只允许 Unit 创建时在 `[0.80, 0.97]` 之间选择（四）。编码阶段如果决定在 `Unit.init` 或解码入口也加一道断言/clamp（比如防止未来某处绕过滑块直接构造 `Unit` 传入非法值），要确认两处范围不要写反或用混，`nextInterval` 那道更宽松的范围只是最后一道防止崩溃的防线。
+6. **六、6.3 的 `process` 方法与七、`ReviewEngine.run` 里调用 `FSRSEngine.initialize`/`.update` 的地方，需要补上 `desiredRetention` 参数**：v4.6 给这两个方法的签名加上了 `desiredRetention: Double`（二），但本文档六、七两节规格描述里实际的调用点还是旧签名，需要编码阶段同步改成"先由 `card.unitID` 查到所属 `Unit`，取其 `desiredRetention` 再传入"。
+7. **`DueCardScheduler`（七、7.x）的触发时机与持久化查询**：`fetchGraduatedCards` 依赖具体持久化方案实现按 `originQueue == nil` 的查询，本文档留空；触发时机是"App 进入前台时跑一次"还是引入 `BGAppRefreshTask` 之类的后台任务，取决于对到期延迟的产品要求，需要编码阶段结合实际测试确定。
+8. **`FSRSEngine.nextInterval` 的 `desiredRetention` clamp 范围 `[0.70, 0.99]`（二）是防御性兜底值，不是产品允许范围**：产品层面仍然只允许 Unit 创建时在 `[0.80, 0.97]` 之间选择（四）。编码阶段如果决定在 `Unit.init` 或解码入口也加一道断言/clamp（比如防止未来某处绕过滑块直接构造 `Unit` 传入非法值），要确认两处范围不要写反或用混，`nextInterval` 那道更宽松的范围只是最后一道防止崩溃的防线。
 
 **v4.0 遗留、已在 v4.1 解决的问题**（记录于此，避免以后误查旧版本文档产生困惑）：
 - ~~`Step.action` 如何表达"复合交互"~~ → 改为不扩展 `StepAction`，用泛型 `RouteTarget<FinishedPayload>.stepWithFollowUp` 表达（见五、5.5）
@@ -1338,3 +1256,7 @@ func runLearningSession(unit: Unit, factory: any LearningStepFactory, settings: 
 - ~~`FollowUpExtractable` 协议未定义~~ → 不再需要这个协议：`RouteTarget<FinishedPayload>` 改为架构层统一提供的泛型类型（不是每个 CardType 各自定义结构相同的枚举），`.stepWithFollowUp` 是所有 CardType 共用的同一个 case，引擎可以直接 `switch` 识别，不需要跨类型识别机制（见五、5.5、六、6.3）
 - ~~`ReviewSession` 的持久化时机没有在 `ReviewEngine.run` 里落实~~ → 已补上：会话开始时先尝试 `fetchReviewSession` 恢复，每次推进到下一步就 `saveReviewSession` 写盘，正常结束或转入完整重学时 `clearReviewSession` 清除（见七）
 - ~~`FSRSEngine.initialize`/`.update` 需要 `payload as! FSRSRating` 强转~~ → 给 `LearningRouteTable`/`ReviewRouteTable` 的 `FinishedPayload` 关联类型加上 `FSRSRatingConvertible` 协议约束（见二），编译期即可保证拿到 `FSRSRating`，`process`/`run` 直接调用 `.fsrsRating`，不再需要运行时强转（见二、五、5.7、六、6.3、七）
+
+**v4.8 遗留、已在 v4.9 解决的问题**：
+- ~~`Unit.masteredStabilityThreshold`（四）与 `FSRSEngine.nextInterval`（二）里的 `factor`/`decay` 是两份独立字面量~~ → `FSRSEngine.decay`/`stabilityAnchorRetention`/`factor` 从 `private` 提升为 `internal static let`（见二），`masteredStabilityThreshold` 直接引用 `FSRSEngine.factor`/`FSRSEngine.decay`，不再维护独立字面量（见四）
+- ~~`ReviewStepFactory` 协议只被引用从未正式声明~~ → 补全声明，与 `LearningStepFactory` 结构对称（见七、7.0）

@@ -2,8 +2,10 @@
 
 > 版本：v4.7 · 日期：2026-08-24
 > 配套设计文档：husk-word-learning-design-v2.md（v1.1，产品逻辑见该文档）
-> 依赖：husk-architecture-code.md（v4.8）—— `Card`/`Step`/`LearningProgress`/`ReviewSession`/`LearningRouteRule`/`stepWithFollowUp`/`ReviewRouteTarget.stepWithFollowUp`/`Unit.masteredStabilityThreshold`/`Unit.desiredRetention`/`ActionResult`/`ListeningSelfCheck`/`StepAction`/`EngineJudge`/`FSRSEngine` 等协议定义
-> 本文档粒度：接口签名 + 关键算法伪代码，不是可直接编译的完整实现。
+> 依赖：husk-architecture-code.md（v4.9）—— `Card`/`Step`/`LearningProgress`/`ReviewSession`/`LearningRouteRule`/`stepWithFollowUp`/`ReviewRouteTarget.stepWithFollowUp`/`Unit.masteredStabilityThreshold`/`Unit.desiredRetention`/`ActionResult`/`ListeningSelfCheck`/`StepAction`/`EngineJudge`/`FSRSEngine`/`AppSettings`/`ReviewStepFactory` 等协议定义
+> 本文档粒度：类型/结构定义用 Swift；算法、逻辑、行为一律用自然语言规格，不含可执行函数体。规则表静态行数据仍用 Swift 字面量列出。
+>
+> 本次修订只调整文档呈现方式（类型保留字段与签名，算法改为自然语言规格），不改变任何产品逻辑，版本号仍为 v4.7。
 >
 > **v4.7 变更**（跟进架构代码文档 v4.6：`FSRSEngine.initialize`/`.update` 新增 `desiredRetention` 参数，不改变任何产品逻辑）：
 > 1. **四、4.5 `transitionToFullRelearn` 里的 `FSRSEngine.update` 调用**：补上 `desiredRetention: unit.desiredRetention`。
@@ -53,7 +55,7 @@ import Foundation
 @Model
 final class WordCard: Card {
     @Attribute(.unique) var id: UUID
-    var cardType: CardType { .word }
+    var cardType: CardType { get }
     var unitID: UUID
 
     // 基本信息
@@ -96,62 +98,14 @@ final class WordCard: Card {
     // 不再有 learningPath / step1CorrectOnFirstTry / checklistUncheckedSpelling / currentStepID
     // ——全部移入 WordLearningTypeContext（见二、2.1），随 LearningProgress 存取
 
-    func reviewPrompt() -> ReviewPrompt {
-        .audio(phonetic: phoneticUS ?? phoneticUK ?? "", audioPath: audioUSPath)
-    }
-
-    func fullDetailContent() -> DetailContent {
-        DetailContent(sections: [
-            DetailSection(id: "meaning", title: "中文含义", content: definitions.map(\.meaning).joined(separator: "\n")),
-            DetailSection(id: "englishMeaning", title: "英文释义", content: englishDefinitions.map(\.content).joined(separator: "\n")),
-            DetailSection(id: "listening", title: "发音", content: phoneticUS ?? phoneticUK ?? ""),
-            DetailSection(id: "spelling", title: "拼写", content: word),
-        ])
-    }
-
-    /// v4.0 新增：按当前"学习内容"筛选后的释义集合，供出题时使用（而不是直接用 definitions）
-    func learningDefinitions() -> [WordDefinition] {
-        guard let ids = learningContentDefinitionIDs else { return definitions }
-        return definitions.filter { ids.contains($0.id) }
-    }
-
-    func learningEnglishDefinitions() -> [WordEnglishDefinition] {
-        guard let ids = learningContentEnglishDefinitionIDs else { return englishDefinitions }
-        return englishDefinitions.filter { ids.contains($0.id) }
-    }
-
-    /// 检查页勾选"部分内容重点学习"时调用，收窄学习内容
-    func narrowLearningContent(toDefinitionIDs defIDs: Set<UUID>?, englishDefinitionIDs enDefIDs: Set<UUID>?) {
-        learningContentDefinitionIDs = defIDs
-        learningContentEnglishDefinitionIDs = enDefIDs
-    }
-
-    /// 每次新一轮学习开始（比如这张卡重新进入 Step0）时，学习内容应重置为默认（=完整内容）
-    func resetLearningContent() {
-        learningContentDefinitionIDs = nil
-        learningContentEnglishDefinitionIDs = nil
-    }
-
-    /// v4.3 新增：这张卡是否已经"学完，不再需要日常复习"（架构设计文档十）。
-    /// 纯展示层判定，不影响调度——依据的是所属 Unit 的 `masteredStabilityThreshold`
-    /// （架构代码文档四），该阈值已经把这个 Unit 的 desiredRetention 换算进去了，
-    /// 这里只需要拿卡片当前的 stability 跟阈值比较，不需要重复计算。
-    /// 调用方需要传入卡片所属的 Unit（而不是从 unitID 反查），避免这个方法本身
-    /// 承担持久化查询的职责。
-    func isCompletelyLearned(in unit: Unit) -> Bool {
-        fsrs.stability >= unit.masteredStabilityThreshold
-    }
-
-    init(word: String, unitID: UUID) {
-        self.id = UUID()
-        self.word = word
-        self.unitID = unitID
-        self.definitions = []
-        self.englishDefinitions = []
-        self.examples = []
-        self.createdAt = .now
-        self.fsrs = FSRSState()
-    }
+    func reviewPrompt() -> ReviewPrompt
+    func fullDetailContent() -> DetailContent
+    func learningDefinitions() -> [WordDefinition]
+    func learningEnglishDefinitions() -> [WordEnglishDefinition]
+    func narrowLearningContent(toDefinitionIDs defIDs: Set<UUID>?, englishDefinitionIDs enDefIDs: Set<UUID>?)
+    func resetLearningContent()
+    func isCompletelyLearned(in unit: Unit) -> Bool
+    init(word: String, unitID: UUID)
 }
 
 @Model
@@ -179,6 +133,55 @@ final class WordExample {
 }
 ```
 
+**`cardType`**：恒为 `.word`。
+
+**`reviewPrompt()`**  
+做什么：给出复习时的线索。  
+输入：无（读卡片自身音标与音频路径）。  
+输出：`ReviewPrompt.audio`。音标优先 `phoneticUS`，否则 `phoneticUK`，再否则空字符串；音频路径用 `audioUSPath`。
+
+**`fullDetailContent()`**  
+做什么：组装详情页完整内容，按固定四个 `DetailSection` 输出。  
+输入：无。  
+输出：`DetailContent`，四个 section 的 id / 标题 / 内容分别为：
+
+- `meaning` / 「中文含义」：`definitions` 各条 `meaning` 用换行拼接
+- `englishMeaning` / 「英文释义」：`englishDefinitions` 各条 `content` 用换行拼接
+- `listening` / 「发音」：`phoneticUS`，否则 `phoneticUK`，再否则空字符串
+- `spelling` / 「拼写」：`word` 字段本身
+
+**`learningDefinitions()`**  
+做什么：按当前「学习内容」筛出题用的中文释义，而不是直接用完整 `definitions`。  
+输入：无。  
+输出：`[WordDefinition]`。`learningContentDefinitionIDs == nil` 表示使用全部 `definitions`；非 nil 时只保留 id 落在该集合里的释义。
+
+**`learningEnglishDefinitions()`**  
+做什么：同上，针对英文释义。  
+输入：无。  
+输出：`[WordEnglishDefinition]`。`learningContentEnglishDefinitionIDs == nil` 表示全部 `englishDefinitions`；非 nil 时按 id 集合筛选。
+
+**`narrowLearningContent(toDefinitionIDs:englishDefinitionIDs:)`**  
+做什么：检查页勾选「部分内容重点学习」时收窄学习内容。  
+输入：中文释义 id 集合、英文释义 id 集合（均可为 nil）。  
+输出：无。把两个字段分别写成传入值。
+
+**`resetLearningContent()`**  
+做什么：每次新一轮学习开始（比如这张卡重新进入 Step0）时，把学习内容重置为默认（=完整内容）。  
+输入：无。  
+输出：无。两个学习内容 id 集合都写成 nil。
+
+**`isCompletelyLearned(in:)`**（v4.3）  
+做什么：纯展示层判定这张卡是否已经「学完，不再需要日常复习」（架构设计文档十）。不影响 FSRS 调度或复习队列。  
+输入：卡片所属的 `Unit`（由调用方传入，本方法不按 `unitID` 做持久化查询）。  
+输出：`Bool`。比较 `fsrs.stability` 与 `unit.masteredStabilityThreshold`：stability 大于等于阈值即为学完。该阈值已经把这个 Unit 的 `desiredRetention` 换算进去，这里不重复计算。
+
+**`init(word:unitID:)`**  
+做什么：新建一张单词卡。  
+输入：词形、所属 Unit id。  
+注意事项：生成新 `id`；`definitions` / `englishDefinitions` / `examples` 为空数组；`createdAt` 为当前时间；`fsrs` 为默认 `FSRSState()`。其余字段用类型上的默认值（如 `source = .wordbook`、`addedToQueue = false`）。学习内容两个 id 集合未写入，保持 nil（即完整内容）。
+
+`WordDefinition` / `WordEnglishDefinition` / `WordExample` 只有字段，没有方法。
+
 ---
 
 ## 二、临时状态类型
@@ -198,12 +201,11 @@ struct WordLearningTypeContext: LearningTypeContext {
 
     /// 默认初始化器：供 WordCardLearningRouteTable.updateProgress 在
     /// progress.typeContext 还是 nil 时构造一个空的初始值
-    init(learningPath: LearningPath? = nil, step1CorrectOnFirstTry: Bool? = nil) {
-        self.learningPath = learningPath
-        self.step1CorrectOnFirstTry = step1CorrectOnFirstTry
-    }
+    init(learningPath: LearningPath? = nil, step1CorrectOnFirstTry: Bool? = nil)
 }
 ```
+
+两个参数都可以省略，缺省都是 nil。`WordCardLearningRouteTable.updateProgress` 在 `progress.typeContext` 仍为 nil 时，必须用这个默认值构造一份空的 `WordLearningTypeContext`，再按 3.5 写入路径/首试标记。
 
 ### 2.2 WordReviewContext：挂在 ReviewSession 上
 
@@ -230,13 +232,7 @@ enum TimedAssessment: Int, Codable {
     case recalledDelayed = 3      // 想到了（3秒后点击）
     case recognizedInstant = 4    // 认识（3秒内点击）
 
-    var fsrsRating: FSRSRating {
-        switch self {
-        case .recognizedInstant, .recalledDelayed: return .easy
-        case .vague: return .good
-        case .unknown: return .again
-        }
-    }
+    var fsrsRating: FSRSRating { get }
 }
 
 /// 释义测试模式（设置项）
@@ -247,15 +243,23 @@ enum DefinitionTestMode: Int, Codable {
 }
 ```
 
+`TimedAssessment.fsrsRating` 的映射（不是可执行 `switch`，实现时按此表转换）：
+
+- `recognizedInstant`、`recalledDelayed` → `easy`
+- `vague` → `good`
+- `unknown` → `again`
+
 `ListeningSelfCheck` 定义见 husk-architecture-code.md 五、5.4.1（架构层类型，因其是 `ActionResult` 一个 case 的 payload，不在此重复）。
 
-`AppSettings` 需要补充单词型专属设置字段：
+`AppSettings` 本体见架构代码文档十一。单词型在其上补充专属字段：
 
 ```swift
 extension AppSettings {
-    var definitionTestMode: DefinitionTestMode { get set }  // 默认 .separateStep
+    var definitionTestMode: DefinitionTestMode { get set }
 }
 ```
+
+该字段默认值为 `.separateStep`。学习规则表的 `definitionTestMode` 条件、以及 Factory 是否把 Step3 编入槽位链，都读这个字段，不另设隐式单例。
 
 ---
 
@@ -285,73 +289,39 @@ let wordCardOrderedStepIDs: [StepID] = [
 ]
 
 let wordCardNonThresholdStepIDs: Set<StepID> = [.step0, .step7a]
-
-/// Step0 是普通的 .timedSelfAssessment，不需要任何复合 action（v4.1 起不再需要，
-/// 见架构代码文档 v4.1 五、5.5 的 stepWithFollowUp 机制）。
-func buildStep0() -> Step {
-    Step(
-        id: .step0,
-        prompt: PromptContent(),   // 渲染时结合具体 card 现填
-        action: .timedSelfAssessment,
-        highlightSectionID: nil
-    )
-}
-
-/// 检查页：不是传送带上的独立槽位，是规则表通过 stepWithFollowUp 触发的一段
-/// "追加交互"。**v1.1 变化**：不再只有"想到了"才触发——"认识（即时）"现在也会
-/// 触发同一个检查页（见 3.4 规则表，.assessment(.recognizedInstant) 与
-/// .assessment(.recalledDelayed) 都指向 stepWithFollowUp）。两者的区别只在于
-/// `allowEmptySelection` 这个参数：
-///   - 来自"认识（即时）" → true，检查页"全部掌握"按钮可用，允许不勾选任何项直接通过
-///   - 来自"想到了" → false，检查页"全部掌握"按钮禁用，必须至少勾选一项未掌握
-/// 这个参数不属于 Step 的静态描述（Step 本身仍然是纯展示），而是构造 checklistConfirm
-/// action 时的一个附加配置，随 action 一起传给渲染层决定按钮是否可点。
-/// StepID 用一个不出现在 wordCardOrderedStepIDs 里的值，明确它不是物理槽位。
-let checkPageStepID = StepID(rawValue: "word.step0.checkPage")
-
-func buildCheckPageStep(allowEmptySelection: Bool) -> Step {
-    Step(
-        id: checkPageStepID,
-        prompt: PromptContent(),   // 渲染时结合具体 card 现填（复用 checklistItems(for:settings:)）
-        action: .checklistConfirm(items: [], allowEmptySelection: allowEmptySelection),
-        highlightSectionID: nil
-    )
-}
-
-func buildStep1() -> Step {
-    Step(id: .step1, prompt: PromptContent(), action: .multipleChoice(options: [], correctIndex: 0), highlightSectionID: "meaning")
-}
-
-func buildStep2() -> Step {
-    Step(id: .step2, prompt: PromptContent(), action: .multipleChoice(options: [], correctIndex: 0), highlightSectionID: "meaning")
-}
-
-func buildStep3() -> Step {
-    Step(id: .step3, prompt: PromptContent(), action: .multipleChoice(options: [], correctIndex: 0), highlightSectionID: "meaning")
-}
-
-func buildStep4() -> Step {
-    Step(id: .step4, prompt: PromptContent(), action: .multipleChoice(options: [], correctIndex: 0), highlightSectionID: "listening")
-}
-
-func buildStep5() -> Step {
-    Step(id: .step5, prompt: PromptContent(), action: .multipleChoice(options: [], correctIndex: 0), highlightSectionID: "listening")
-}
-
-func buildStep6() -> Step {
-    Step(id: .step6, prompt: PromptContent(), action: .binarySelfAssessment, highlightSectionID: "listening")
-}
-
-func buildStep7() -> Step {
-    Step(id: .step7, prompt: PromptContent(), action: .spelling(correctAnswer: "", toleranceRule: .exact), highlightSectionID: "spelling")
-}
-
-func buildStep7a() -> Step {
-    Step(id: .step7a, prompt: PromptContent(), action: .multipleChoice(options: [], correctIndex: 0), highlightSectionID: "spelling")
-}
 ```
 
-**对比 v3.0**：每个 Step 的构造函数不再需要 `settings: AppSettings` 参数——原来 `definitionTestMode` 会影响 Step1/2/3 具体测什么、Step3 存不存在，这部分判断现在完全交给规则表（`definitionTestMode` 作为规则表的条件字段，见 3.4），`Step` 本身只是"这个 StepID 对应一个什么形式的交互"的静态占位，不需要知道设置内容。**Step 是否要编入 `LearningStepSequence.steps` 字典**（比如 `.off`/`.replace` 模式下 Step3 是否存在）这件事，本文档在 3.6 节的 Factory 组装里仍然需要根据设置做一次性判断——这不是"路由逻辑"，是"这个 CardType 在当前配置下，物理槽位链里到底有没有 Step3 这个工位"的结构性决定，跟"某张卡具体怎么从一个 Step 走到下一个"是两回事。
+Step0 是普通的 `.timedSelfAssessment`，不需要任何复合 action（v4.1 起不再需要，见架构代码文档 v4.1 五、5.5 的 `stepWithFollowUp` 机制）。各 Step 的 `prompt` 在渲染时结合具体 card 现填，静态定义里是空的 `PromptContent()`。选择题的 `options` / `correctIndex`、拼写的 `correctAnswer` 同样是模板占位，真实内容由六、第3条的 `fill` 在渲染前填入。
+
+检查页不是传送带上的独立槽位，是规则表通过 `stepWithFollowUp` 触发的一段「追加交互」。**v1.1 变化**：不再只有「想到了」才触发——「认识（即时）」现在也会触发同一个检查页（见 3.4 规则表，`.assessment(.recognizedInstant)` 与 `.assessment(.recalledDelayed)` 都指向 `stepWithFollowUp`）。两者的区别只在于 `allowEmptySelection` 这个参数：
+
+- 来自「认识（即时）」→ `true`，检查页「全部掌握」按钮可用，允许不勾选任何项直接通过
+- 来自「想到了」→ `false`，检查页「全部掌握」按钮禁用，必须至少勾选一项未掌握
+
+这个参数不属于 Step 的静态描述（Step 本身仍然是纯展示），而是构造 `checklistConfirm` action 时的一个附加配置，随 action 一起传给渲染层决定按钮是否可点。StepID 用一个不出现在 `wordCardOrderedStepIDs` 里的值，明确它不是物理槽位。
+
+```swift
+let checkPageStepID = StepID(rawValue: "word.step0.checkPage")
+```
+
+各 Step 静态形状：
+
+| 名称 | id | action | highlightSectionID | 是否物理槽位 |
+| --- | --- | --- | --- | --- |
+| Step0 学前自测 | `.step0` | `.timedSelfAssessment` | nil | 是 |
+| 检查页 | `checkPageStepID`（`word.step0.checkPage`） | `.checklistConfirm`（items 渲染时填；`allowEmptySelection` 见上） | nil | 否（`stepWithFollowUp` 携带） |
+| Step1 | `.step1` | `.multipleChoice` | `"meaning"` | 是 |
+| Step2 | `.step2` | `.multipleChoice` | `"meaning"` | 是 |
+| Step3 | `.step3` | `.multipleChoice` | `"meaning"` | 是（仅 `definitionTestMode == .separateStep` 时编入槽位链，见 3.6） |
+| Step4 | `.step4` | `.multipleChoice` | `"listening"` | 是 |
+| Step5 | `.step5` | `.multipleChoice` | `"listening"` | 是 |
+| Step6 | `.step6` | `.binarySelfAssessment` | `"listening"` | 是 |
+| Step7 | `.step7` | `.spelling`（`toleranceRule: .exact`） | `"spelling"` | 是 |
+| Step7a | `.step7a` | `.multipleChoice` | `"spelling"` | 是 |
+
+3.4 规则表行里的 `buildCheckPageStep(allowEmptySelection:)` 指的就是上表「检查页」这一份静态形状，按入口传入对应的 `allowEmptySelection`。它不是独立物理工位，也不出现在 Factory 的槽位字典里。
+
+**对比 v3.0**：每个 Step 的构造不再需要 `settings: AppSettings` 参数——原来 `definitionTestMode` 会影响 Step1/2/3 具体测什么、Step3 存不存在，这部分判断现在完全交给规则表（`definitionTestMode` 作为规则表的条件字段，见 3.4），`Step` 本身只是「这个 StepID 对应一个什么形式的交互」的静态占位，不需要知道设置内容。**Step 是否要编入 `LearningStepSequence.steps` 字典**（比如 `.off`/`.replace` 模式下 Step3 是否存在）这件事，本文档在 3.6 节的 Factory 组装里仍然需要根据设置做一次性判断——这不是「路由逻辑」，是「这个 CardType 在当前配置下，物理槽位链里到底有没有 Step3 这个工位」的结构性决定，跟「某张卡具体怎么从一个 Step 走到下一个」是两回事。
 
 ### 3.3 LearningOutcomeKey：查表用的判定结果枚举
 
@@ -388,8 +358,16 @@ struct WordLearningRouteRule: RouteRuleMatching {
     /// 架构层统一提供的，单词型不需要重新定义这个枚举结构。
     let target: RouteTarget<FSRSRating>
     let signal: FailureSignal
-}
 
+    func matchesKey<Key: Equatable>(_ key: Key) -> Bool
+    func matchesConditions(against state: Any) -> Bool
+    var specificity: Int { get }
+}
+```
+
+`RouteRuleMatching` 在本类型上的含义：键是 `(step, outcome)` 必须精确相等；条件吻合指 `learningPath` / `definitionTestMode` / `step1FirstTry` 为 nil 则通配，非 nil 则分别与当前 `WordLearningTypeContext.learningPath`、`AppSettings.definitionTestMode`、`step1CorrectOnFirstTry` 一致；`specificity` 为这三个条件字段里非 nil 的个数。
+
+```swift
 /// 完整规则表。按 Step 分组注释，方便对照设计文档附录A逐条核对。
 let wordLearningRouteTable: [WordLearningRouteRule] = [
 
@@ -545,105 +523,61 @@ let wordLearningRouteTable: [WordLearningRouteRule] = [
 struct WordCardLearningRouteTable: LearningRouteTable {
     typealias FinishedPayload = FSRSRating
 
-    /// EngineJudge.evaluate 产出的通用 ActionResult -> 单词型自己的 outcome 枚举。
-    /// 这里是"检查页勾选结果如何转换成规则表可查的outcome"问题的具体落地（v4.1 解决）。
-    func outcomeKey(from result: ActionResult) -> WordLearningOutcomeKey {
-        switch result {
-        case .boolResult(let passed):
-            return passed ? .correct : .incorrect
-        case .timedAssessmentResult(let assessment):
-            return .assessment(assessment)
-        case .listeningCheckResult(let check):
-            // Step6 专用（本文档六、第2条实现细节）。假定 EngineJudge.evaluate
-            // 已经区分 Step0 的限时自测与 Step6 的听音自测，产出不同的 ActionResult
-            // case——两者虽然都是"用户点了两个选项之一"，但语义、时限规则不同，
-            // 由 EngineJudge 层面就分开，而不是在这里靠 step 参数反推。
-            return .listeningCheck(check)
-        case .checklistResult(let uncheckedItems):
-            let uncheckedMeaning = uncheckedItems.contains { $0.id == "meaning" }
-            let uncheckedSpelling = uncheckedItems.contains { $0.id == "spelling" }
-            return .checklistCompleted(uncheckedMeaning: uncheckedMeaning, uncheckedSpelling: uncheckedSpelling)
-        default:
-            fatalError("单词型学习流程不会产生这种 ActionResult")
-        }
-    }
-
-    // signature 订正见本节末尾说明：resolve 补上 settings 参数，
-    // 不再依赖内部的 currentDefinitionTestMode() 隐式读取全局状态。
-    func resolve(step: StepID, outcome: WordLearningOutcomeKey, progress: LearningProgress, settings: AppSettings) -> (target: RouteTarget<FSRSRating>, signal: FailureSignal)? {
-        let context = progress.typeContext as? WordLearningTypeContext
-        let candidates = wordLearningRouteTable.filter { rule in
-            rule.step == step && rule.outcome == outcome &&
-            (rule.learningPath == nil || rule.learningPath == context?.learningPath) &&
-            (rule.definitionTestMode == nil || rule.definitionTestMode == settings.definitionTestMode) &&
-            (rule.step1FirstTry == nil || rule.step1FirstTry == context?.step1CorrectOnFirstTry)
-        }
-        guard let best = resolveRoute(candidates: candidates) else { return nil }
-        return (best.target, best.signal)
-    }
-
-    func updateProgress(_ progress: LearningProgress, step: StepID, outcome: WordLearningOutcomeKey) -> LearningProgress {
-        var progress = progress
-        var context = (progress.typeContext as? WordLearningTypeContext) ?? WordLearningTypeContext()
-
-        switch (step, outcome) {
-        case (.step0, .assessment(.vague)):
-            context.learningPath = .vagueMini
-        case (.step0, .assessment(.unknown)):
-            context.learningPath = .full
-        case (.step0, .checklistCompleted):
-            // 不区分是"认识"还是"想到了"触发的检查页——只要检查页产生了
-            // .checklistCompleted 这个 outcome（意味着走到了重点学习分支，
-            // 而不是"认识"入口全空直接 .finished 的那一行），学习路径统一记为
-            // .checkPageRemedial。"认识+全部掌握"直接 target: .finished，
-            // updateProgress 根本不会被调用到这一步，不需要在这里额外分支。
-            context.learningPath = .checkPageRemedial
-        case (.step1, .correct) where context.step1CorrectOnFirstTry == nil:
-            context.step1CorrectOnFirstTry = true
-        case (.step1, .incorrect):
-            context.step1CorrectOnFirstTry = false
-        default:
-            break
-        }
-
-        progress.typeContext = context
-        return progress
-    }
-
+    func outcomeKey(from result: ActionResult) -> WordLearningOutcomeKey
+    func resolve(step: StepID, outcome: WordLearningOutcomeKey, progress: LearningProgress, settings: AppSettings) -> (target: RouteTarget<FSRSRating>, signal: FailureSignal)?
+    func updateProgress(_ progress: LearningProgress, step: StepID, outcome: WordLearningOutcomeKey) -> LearningProgress
 }
 ```
 
-> **发现一处协议签名遗漏并订正**：`currentDefinitionTestMode()` 原先设计成不带参数、内部自行读取全局单例，但 `definitionTestMode` 是 `AppSettings` 上的字段（同 `resolvedLearningGoal(settings:)` 等其他读取 `AppSettings` 的地方一样），而 `LearningRouteTable.resolve(step:outcome:progress:)`（架构代码文档五、5.7）的协议签名里根本没有 `settings` 参数——`buildSequence(for:settings:)` 在 v4.1 已经把 `settings` 补进了 Factory 协议（架构代码文档 v4.1 补充第2条），但同一次补漏漏掉了 `resolve` 这一侧，导致 `resolve` 内部除了自行访问某个隐式单例外无路可走。已按上面的实现订正：`resolve` 协议签名和本文档的具体实现都补上了 `settings: AppSettings` 参数，`ReviewRouteTable.resolve` 同理需要补上（复习流程虽然本次没有条件字段读设置，但协议对称性上应该保持一致，避免以后复习侧需要读设置时又要走一遍这次的弯路）。这个改动也意味着调用方（架构代码文档六 `LearningEngine.process`、七 `ReviewEngine.run`）在调用 `ruleTable.resolve(...)` 时需要多传一个 `settings`——这两处本来就已经持有 `settings`（`step(factory:settings:...)` 的参数列表里已经有），只是原来没有继续往 `resolve` 里传，属于顺手补齐，不引入新的依赖来源。
-```
+**`outcomeKey(from:)`**  
+做什么：把 `EngineJudge.evaluate` 产出的通用 `ActionResult` 转成单词型自己的 outcome 枚举。这是「检查页勾选结果如何转换成规则表可查的 outcome」的落地（v4.1）。  
+输入：一次作答的 `ActionResult`。  
+输出：`WordLearningOutcomeKey`。对应关系：
 
-> `WordLearningTypeContext` 需要一个无参默认初始化器（`init()`），供 `updateProgress` 在 `progress.typeContext` 还是 `nil` 时构造一个空的初始值，二、2.1 节的定义需要补上这个初始化器，本文档正文遗漏了这处细节，见六。
+- `.boolResult`：`true` → `.correct`，`false` → `.incorrect`
+- `.timedAssessmentResult`：原样包进 `.assessment(...)`
+- `.listeningCheckResult`：原样包进 `.listeningCheck(...)`。这是 Step6 专用（本文档六、第2条）。假定 `EngineJudge.evaluate` 已经区分 Step0 的限时自测与 Step6 的听音自测，产出不同的 `ActionResult` case——两者虽然都是「用户点了两个选项之一」，但语义、时限规则不同，由 EngineJudge 层面就分开，而不是在这里靠 step 参数反推。
+- `.checklistResult`：看 `uncheckedItems` 里是否含有 id 为 `"meaning"` 的项 → `uncheckedMeaning`；是否含有 id 为 `"spelling"` 的项 → `uncheckedSpelling`；产出 `.checklistCompleted(uncheckedMeaning:uncheckedSpelling:)`
+- 其它 `ActionResult` case：单词型学习流程不会产生，视为编程错误
+
+**`resolve(step:outcome:progress:settings:)`**  
+做什么：按当前步、outcome、进度上下文和设置，从 `wordLearningRouteTable` 查出唯一生效行。签名已补上 `settings` 参数，不再依赖内部的 `currentDefinitionTestMode()` 隐式读取全局状态。  
+输入：当前 `StepID`、已转换的 outcome、`LearningProgress`、`AppSettings`。  
+输出：命中行的 `(target, signal)`；没有可解析行则为 nil。  
+注意事项：从 `progress.typeContext` 取出 `WordLearningTypeContext`（可能为 nil）。先按「step 相等、outcome 相等、以及各可选条件」过滤：规则行的 `learningPath` / `definitionTestMode` / `step1FirstTry` 为 nil 表示通配，非 nil 则分别与 `context?.learningPath`、`settings.definitionTestMode`、`context?.step1CorrectOnFirstTry` 比较。过滤后的候选交给架构层 `resolveRoute(candidates:)` 做特异性匹配，取中的那一行给出 target 与 signal。`settings` 必须由调用方传入，禁止在内部隐式读全局单例（订正说明见本节末尾）。
+
+**`updateProgress(_:step:outcome:)`**  
+做什么：根据「刚完成的 (step, outcome)」回写本轮学习临时状态。  
+输入：当前 `LearningProgress`、刚完成的 Step、对应 outcome。  
+输出：写回 `typeContext` 后的 `LearningProgress`。  
+注意事项：若 `progress.typeContext` 还不是 `WordLearningTypeContext`（含 nil），先用 2.1 的默认初始化器得到空上下文，再按下表写入：
+
+- Step0 + `.assessment(.vague)` → `learningPath = .vagueMini`
+- Step0 + `.assessment(.unknown)` → `learningPath = .full`
+- Step0 + `.checklistCompleted`（不区分是「认识」还是「想到了」触发的检查页）→ `learningPath = .checkPageRemedial`。只要检查页产生了 `.checklistCompleted` 这个 outcome（意味着走到了重点学习分支，而不是「认识」入口全空直接 `.finished` 的那一行），学习路径统一记为检查页补学。「认识 + 全部掌握」直接 `target: .finished`，`updateProgress` 根本不会被调用到这一步，不需要在这里额外分支。
+- Step1 + `.correct`，且当前 `step1CorrectOnFirstTry == nil` → 记 `true`（只在尚未写过时记首次正确）
+- Step1 + `.incorrect` → `step1CorrectOnFirstTry = false`
+- 其它 (step, outcome) 不改上下文
+
+写回 `progress.typeContext` 后返回。
+
+> **发现一处协议签名遗漏并订正**：`currentDefinitionTestMode()` 原先设计成不带参数、内部自行读取全局单例，但 `definitionTestMode` 是 `AppSettings` 上的字段（同 `resolvedLearningGoal(settings:)` 等其他读取 `AppSettings` 的地方一样），而 `LearningRouteTable.resolve(step:outcome:progress:)`（架构代码文档五、5.7）的协议签名里根本没有 `settings` 参数——`buildSequence(for:settings:)` 在 v4.1 已经把 `settings` 补进了 Factory 协议（架构代码文档 v4.1 补充第2条），但同一次补漏漏掉了 `resolve` 这一侧，导致 `resolve` 内部除了自行访问某个隐式单例外无路可走。已按上面的实现订正：`resolve` 协议签名和本文档的具体实现都补上了 `settings: AppSettings` 参数，`ReviewRouteTable.resolve` 同理需要补上（复习流程虽然本次没有条件字段读设置，但协议对称性上应该保持一致，避免以后复习侧需要读设置时又要走一遍这次的弯路）。这个改动也意味着调用方（架构代码文档六 `LearningEngine.process`、七 `ReviewEngine.run`）在调用 `ruleTable.resolve(...)` 时需要多传一个 `settings`——这两处本来就已经持有 `settings`（`step(factory:settings:...)` 的参数列表里已经有），只是原来没有继续往 `resolve` 里传，属于顺手补齐，不引入新的依赖来源。
+
+> `WordLearningTypeContext` 需要一个无参默认初始化器（`init()`），供 `updateProgress` 在 `progress.typeContext` 还是 `nil` 时构造一个空的初始值，二、2.1 节已给出该初始化器的规格。
 
 ### 3.6 图的组装：Factory 只管 UI
 
 ```swift
 struct WordCardStepFactory: LearningStepFactory {
-    func buildSequence(for cardType: CardType, settings: AppSettings) -> LearningStepSequence {
-        guard cardType == .word else { fatalError("type mismatch") }
-
-        // Step3 是否编入槽位链，取决于全局设置——这是"这个 CardType 在当前配置下
-        // 物理槽位链的结构"，不是路由逻辑，Factory 仍需要做这个一次性判断
-        var steps: [StepID: Step] = [
-            .step0: buildStep0(), .step1: buildStep1(), .step2: buildStep2(),
-            .step4: buildStep4(), .step5: buildStep5(), .step6: buildStep6(),
-            .step7: buildStep7(), .step7a: buildStep7a(),
-        ]
-        if settings.definitionTestMode == .separateStep {
-            steps[.step3] = buildStep3()
-        }
-
-        return LearningStepSequence(
-            orderedStepIDs: wordCardOrderedStepIDs,
-            steps: steps,
-            nonThresholdStepIDs: wordCardNonThresholdStepIDs
-        )
-    }
+    func buildSequence(for cardType: CardType, settings: AppSettings) -> LearningStepSequence
 }
 ```
+
+**`buildSequence(for:settings:)`**  
+做什么：按当前设置组装单词型的物理槽位链（只决定「有哪些工位」，不做路由）。  
+输入：`CardType`、`AppSettings`。  
+输出：`LearningStepSequence`，其中 `orderedStepIDs` 用 `wordCardOrderedStepIDs`，`nonThresholdStepIDs` 用 `wordCardNonThresholdStepIDs`，`steps` 字典按 3.2 的静态形状填入 Step0/1/2/4/5/6/7/7a。  
+注意事项：`cardType` 必须是 `.word`，否则视为编程错误（类型不匹配）。**仅当** `settings.definitionTestMode == .separateStep` 时才把 Step3 编入 `steps` 字典。Step3 是否进槽位链是「这个 CardType 在当前配置下物理槽位链的结构」，不是路由逻辑，Factory 仍做这一次判断。
 
 ---
 
@@ -690,8 +624,16 @@ struct WordReviewRouteRule: RouteRuleMatching {
     /// v4.1 五、5.7），不再单独定义 WordReviewRouteTarget——结构完全一致，没有理由重复定义。
     let target: ReviewRouteTarget<FSRSRating>
     let signal: FailureSignal
-}
 
+    func matchesKey<Key: Equatable>(_ key: Key) -> Bool
+    func matchesConditions(against state: Any) -> Bool
+    var specificity: Int { get }
+}
+```
+
+键是 `(step, outcome)` 必须精确相等；条件字段只有 `assessmentSource`（nil 通配，非 nil 则与 `WordReviewContext.assessment` 一致）；`specificity` 为该字段非 nil 则 1，否则 0。
+
+```swift
 let wordReviewRouteTable: [WordReviewRouteRule] = [
     // ── 复习自测 ──
     .init(step: .reviewAssessment, outcome: .assessment(.recognizedInstant), assessmentSource: nil,
@@ -756,151 +698,97 @@ let wordReviewRouteTable: [WordReviewRouteRule] = [
 struct WordCardReviewRouteTable: ReviewRouteTable {
     typealias FinishedPayload = FSRSRating
 
-    func outcomeKey(from result: ActionResult) -> WordReviewOutcomeKey {
-        switch result {
-        case .boolResult(let passed):
-            return passed ? .correct : .incorrect
-        case .timedAssessmentResult(let assessment):
-            return .assessment(assessment)
-        case .checklistResult(let uncheckedItems):
-            // v4.2 新增：复习确认页（4.1 reviewCheckPageStepID）产生的结果转换，
-            // 与学习流程 WordCardLearningRouteTable.outcomeKey(from:) 里对
-            // .checklistResult 的处理同构（见三、3.5），复用同样的 "meaning"/"spelling"
-            // 这两个 DetailSection id 作为勾选项的判定依据。
-            let uncheckedMeaning = uncheckedItems.contains { $0.id == "meaning" }
-            let uncheckedSpelling = uncheckedItems.contains { $0.id == "spelling" }
-            return .checklistCompleted(uncheckedMeaning: uncheckedMeaning, uncheckedSpelling: uncheckedSpelling)
-        }
-    }
-
-    /// v4.6 订正：补上 settings 参数，遵循架构代码文档 v4.4 五、5.7 的协议签名
-    /// （`ReviewRouteTable.resolve` 要求 settings 参数，与 `LearningRouteTable.resolve`
-    /// 对称）。此前这里遗漏了这个参数——本文档三、3.5 节末尾的说明文字早已指出
-    /// "ReviewRouteTable.resolve 同理需要补上"，但实现代码本身一直没有跟上，
-    /// 属于文档内部前后不一致，这里订正。单词型复习规则表目前没有条件字段依赖
-    /// settings，所以这次订正不影响任何现有规则行为，只是让签名与协议保持一致。
-    func resolve(step: StepID, outcome: WordReviewOutcomeKey, session: ReviewSession, settings: AppSettings) -> (target: ReviewRouteTarget<FSRSRating>, signal: FailureSignal)? {
-        let context = session.typeContext as? WordReviewContext
-        let candidates = wordReviewRouteTable.filter { rule in
-            rule.step == step && rule.outcome == outcome &&
-            (rule.assessmentSource == nil || rule.assessmentSource == context?.assessment)
-        }
-        guard let best = resolveRoute(candidates: candidates) else { return nil }
-        return (best.target, best.signal)
-    }
-
-    func updateSession(_ session: ReviewSession, step: StepID, outcome: WordReviewOutcomeKey) -> ReviewSession {
-        var session = session
-        if case .assessment(let assessment) = outcome, step == .reviewAssessment {
-            session.typeContext = WordReviewContext(assessment: assessment)
-        }
-        return session
-    }
+    func outcomeKey(from result: ActionResult) -> WordReviewOutcomeKey
+    func resolve(step: StepID, outcome: WordReviewOutcomeKey, session: ReviewSession, settings: AppSettings) -> (target: ReviewRouteTarget<FSRSRating>, signal: FailureSignal)?
+    func updateSession(_ session: ReviewSession, step: StepID, outcome: WordReviewOutcomeKey) -> ReviewSession
 }
 ```
+
+**`outcomeKey(from:)`**  
+做什么：把通用 `ActionResult` 转成复习用 outcome。  
+输入：`ActionResult`。  
+输出：`WordReviewOutcomeKey`。对应关系：
+
+- `.boolResult`：`true` → `.correct`，`false` → `.incorrect`
+- `.timedAssessmentResult`：包进 `.assessment(...)`
+- `.checklistResult`：与学习流程 3.5 同构，用 `"meaning"` / `"spelling"` 两个 DetailSection id 判定 `uncheckedMeaning` / `uncheckedSpelling`，产出 `.checklistCompleted`（v4.2：复习确认页 `reviewCheckPageStepID` 的结果转换）
+
+**`resolve(step:outcome:session:settings:)`**  
+做什么：从 `wordReviewRouteTable` 查生效行。  
+输入：当前 Step、outcome、`ReviewSession`、`AppSettings`。  
+输出：`(target, signal)` 或 nil。  
+注意事项：v4.6 订正后签名含 `settings`，遵循架构代码文档 v4.4 五、5.7 的协议签名（`ReviewRouteTable.resolve` 要求 settings 参数，与 `LearningRouteTable.resolve` 对称）。此前这里遗漏了这个参数——本文档三、3.5 节末尾的说明文字早已指出「ReviewRouteTable.resolve 同理需要补上」，属于文档内部前后不一致，这里订正。单词型复习规则表目前没有条件字段依赖 settings，这次订正不影响任何现有规则行为，只是让签名与协议保持一致。从 `session.typeContext` 取出 `WordReviewContext`。过滤条件：step 相等、outcome 相等；规则行 `assessmentSource` 为 nil 则通配，否则必须等于 `context?.assessment`。候选再交给架构层 `resolveRoute`。
+
+**`updateSession(_:step:outcome:)`**  
+做什么：复习自测完成后，把这次限时判定写入会话上下文，供拼写步按 `assessmentSource` 查表。  
+输入：当前 `ReviewSession`、刚完成的 Step、outcome。  
+输出：可能已写入 `typeContext` 的 `ReviewSession`。  
+注意事项：仅当 outcome 是 `.assessment(某 TimedAssessment)` **并且** step 是 `.reviewAssessment` 时，把 `session.typeContext` 写成 `WordReviewContext(assessment:)`；其它情况原样返回。
 
 ### 4.4 Step 定义与 Factory
 
+复习侧各 Step 静态形状：
+
+| 名称 | id | action | highlightSectionID | 是否物理槽位 |
+| --- | --- | --- | --- | --- |
+| 复习自测 | `.reviewAssessment` | `.timedSelfAssessment` | nil | 是（复习会话入口） |
+| 复习拼写 | `.reviewSpelling` | `.spelling`（`toleranceRule: .exact`） | `"spelling"` | 是 |
+| 复习确认页 | `reviewCheckPageStepID`（`word.review.checkPage`） | `.checklistConfirm`，`allowEmptySelection` **恒为 true** | nil | 否（`stepWithFollowUp` 携带） |
+
+复习确认页仅「认识（即时）」分支通过 `stepWithFollowUp` 触发（见 4.3）。复用学习流程检查页同款 action（`.checklistConfirm`），但这里始终 `allowEmptySelection: true`——复习确认页的语境本身就是「可以不勾选，默认按你刚才选的认识算」，不存在「想到了」那种强制勾选的分支（复习流程的「想到了」根本不经过这个页面，见 4.3）。展示内容范围（完整 vs 收窄后）遵循与失败详情页相同的规则：若这张卡当前 `learningContentDefinitionIDs` / `learningContentEnglishDefinitionIDs` 非 nil，只展示收窄后的部分，否则展示完整内容（渲染时结合 `card.learningDefinitions()` / `card.learningEnglishDefinitions()` 生成，具体见六遗留细节）。4.3 规则表行里的 `buildReviewCheckPageStep()` 指的就是这一份静态形状。
+
 ```swift
-func buildReviewAssessment() -> Step {
-    Step(id: .reviewAssessment, prompt: PromptContent(), action: .timedSelfAssessment, highlightSectionID: nil)
-}
-
-func buildReviewSpelling() -> Step {
-    Step(id: .reviewSpelling, prompt: PromptContent(), action: .spelling(correctAnswer: "", toleranceRule: .exact), highlightSectionID: "spelling")
-}
-
-/// v4.2 新增：复习确认页，仅"认识（即时）"分支通过 stepWithFollowUp 触发（见 4.3）。
-/// 复用学习流程检查页同款 action（.checklistConfirm），但这里始终 allowEmptySelection: true
-/// ——复习确认页的语境本身就是"可以不勾选，默认按你刚才选的认识算"，不存在
-/// "想到了"那种强制勾选的分支（复习流程的"想到了"根本不经过这个页面，见 4.3）。
-/// 展示内容范围（完整 vs 收窄后）遵循与失败详情页相同的规则：若这张卡当前
-/// learningContentDefinitionIDs/learningContentEnglishDefinitionIDs 非 nil，
-/// 只展示收窄后的部分，否则展示完整内容（渲染时结合 card.learningDefinitions()/
-/// card.learningEnglishDefinitions() 生成，具体见六遗留细节）。
-func buildReviewCheckPageStep() -> Step {
-    Step(
-        id: reviewCheckPageStepID,
-        prompt: PromptContent(),   // 渲染时结合具体 card 现填
-        action: .checklistConfirm(items: [], allowEmptySelection: true),
-        highlightSectionID: nil
-    )
-}
-
 struct WordCardReviewStepFactory: ReviewStepFactory {
-    func startStepID(for cardType: CardType) -> StepID { .reviewAssessment }
-
-    func buildStep(id: StepID, for cardType: CardType) -> Step {
-        switch id {
-        case .reviewAssessment: return buildReviewAssessment()
-        case .reviewSpelling: return buildReviewSpelling()
-        default: fatalError("unknown review step")
-        }
-    }
+    func startStepID(for cardType: CardType) -> StepID
+    func buildStep(id: StepID, for cardType: CardType) -> Step
 }
 ```
 
-> **注意**：`reviewCheckPageStepID` 不会出现在 `WordCardReviewStepFactory.buildStep(id:for:)` 的 switch 里——跟学习流程的 `checkPageStepID` 一样，它不是 Factory 按 StepID 查询组装的物理槽位，而是规则表里 `stepWithFollowUp(followUpStep:)` 直接携带的 Step 值（构造时已经调用了 `buildReviewCheckPageStep()`），引擎收到后直接展示，不会反过来问 Factory "这个 StepID 对应什么 Step"。
+**`startStepID(for:)`**  
+输出：恒为 `.reviewAssessment`。
 
-### 4.5 转入完整重学 / "想到了"次日覆盖
+**`buildStep(id:for:)`**  
+做什么：按 StepID 给出复习流程里 Factory 负责的物理步。  
+输入：StepID、CardType。  
+输出：对应 Step（形状见上表）。  
+注意事项：只认识 `.reviewAssessment` 与 `.reviewSpelling`。未知 id 视为编程错误。
 
-```swift
-func transitionToFullRelearn(card: WordCard, unit: Unit, session: ReviewSession) {
-    // 具体的槽位入队、originQueue/LearningProgress 写入由架构层的
-    // transitionToFullRelearn(card:unit:session:entryStepID:) 完成（见架构代码文档 v4.0 八）
-    let progress = LearningProgress(
-        cardID: card.id,
-        currentStepID: .step2,
-        typeContext: WordLearningTypeContext(learningPath: .vagueMini, step1CorrectOnFirstTry: nil)
-    )
-    // saveLearningProgress(progress) —— 实际写入由架构层持久化接口完成
-    // v4.6：update 新增 desiredRetention 参数（架构代码文档二），从卡片所属 unit 读取
-    FSRSEngine.update(&card.fsrs, rating: .again, desiredRetention: unit.desiredRetention)
-}
+> **注意**：`reviewCheckPageStepID` 不会出现在 `WordCardReviewStepFactory.buildStep(id:for:)` 的分发里——跟学习流程的 `checkPageStepID` 一样，它不是 Factory 按 StepID 查询组装的物理槽位，而是规则表里 `stepWithFollowUp(followUpStep:)` 直接携带的 Step 值（构造时已经是 4.4 确认页那份静态形状），引擎收到后直接展示，不会反过来问 Factory「这个 StepID 对应什么 Step」。
 
-extension WordCard {
-    func postFSRSUpdateHook(context: ReviewSession?) {
-        guard let wordContext = context?.typeContext as? WordReviewContext else { return }
-        if wordContext.assessment == .recalledDelayed {
-            fsrs.dueDate = Calendar.current.date(byAdding: .day, value: 1, to: .now)
-            fsrs.dueDateOverridden = true
-        }
-    }
-}
-```
+### 4.5 转入完整重学 / 「想到了」次日覆盖
+
+**`transitionToFullRelearn(card:unit:session:)`**  
+做什么：复习侧决定转入完整重学时，准备单词型自己的入口进度，并按 again 更新 FSRS。  
+输入：当前 `WordCard`、所属 `Unit`、当前 `ReviewSession`。  
+输出：无（副作用：写入学习进度、更新卡片 FSRS）。  
+注意事项：槽位入队、`originQueue` / `LearningProgress` 的实际持久化由架构层 `transitionToFullRelearn(card:unit:session:entryStepID:)` 完成（见架构代码文档 v4.0 八）。单词型要准备的进度是：`currentStepID = .step2`，`typeContext` 为 `WordLearningTypeContext(learningPath: .vagueMini, step1CorrectOnFirstTry: nil)`——即从 Step2 进入、走模糊迷你路径。实际写入由架构层持久化接口完成。然后对 `card.fsrs` 做 `FSRSEngine.update`，rating 为 `.again`，`desiredRetention` 取 `unit.desiredRetention`（v4.6：`update` 新增该参数，架构代码文档二，从卡片所属 unit 读取）。
+
+**`WordCard.postFSRSUpdateHook(context:)`**  
+做什么：FSRS 更新之后的单词型附加覆盖。  
+输入：可选的 `ReviewSession`（`ReviewSession?`）。  
+输出：无。  
+注意事项：仅当 `context?.typeContext` 能当成 `WordReviewContext`，且其中 `assessment == .recalledDelayed` 时生效：把 `fsrs.dueDate` 强制写成「今天起加 1 个日历日」，并置 `fsrs.dueDateOverridden = true`。其它自测结果不改 dueDate。
 
 ---
 
 ## 五、独立捷径（不查表）
 
-```swift
-/// 学习界面"标熟"按钮：用户在 Unit 主界面/学习列表里主动操作，不依赖任何具体 Step
-/// 的判定，直接判学完，不经过 wordLearningRouteTable。本次只覆盖学习流程中的卡
-/// （originQueue 为 .newCards 或 .fullRelearn 的卡），复习流程的类似捷径本次不做。
-///
-/// v4.2 变化：Step0 自测选"认识（即时）"不再是独立捷径——现在会触发检查页
-/// （见三、3.4 规则表 .stepWithFollowUp），跟"想到了"共用同一套 stepWithFollowUp
-/// 机制，只是检查页的 allowEmptySelection 参数不同。原来这里的
-/// `handleRecognizedInstant` 函数已被移除，"认识（即时）+ 检查页全部掌握"这条路径
-/// 现在完全由规则表驱动（见三、3.4 的 .checklistCompleted(false, false) 那一行，
-/// target: .finished(.easy)），不需要引擎层的特殊捷径分支。
-func handleMarkAsFamiliar(card: WordCard, unit: Unit) {
-    guard card.originQueue == .newCards || card.originQueue == .fullRelearn else { return }
-    // 槽位来自 LearningProgress.currentStepID（架构代码文档四、`LearningProgress`
-    // 是这张卡当前排在哪个 Step 槽位的唯一权威来源，见该文档 v4.0 变更 2），
-    // 而不是重新推导或假设固定入口——"标熟"可能发生在学习流程的任意一步。
-    guard let progress = fetchLearningProgress(cardID: card.id) else {
-        // 理论上不应发生：能在学习列表里看到这张卡，说明它一定有一份未完成的
-        // LearningProgress。查不到视为数据不一致，交给上层按异常处理，不在这里静默兜底。
-        return
-    }
-    unit.learningSlots.removeCompletedCard(card.id, from: progress.currentStepID)
-    // v4.6：initialize 新增 desiredRetention 参数（架构代码文档二），从卡片所属 unit 读取
-    FSRSEngine.initialize(&card.fsrs, rating: .easy, desiredRetention: unit.desiredRetention)
-    card.originQueue = nil
-    clearLearningProgress(cardID: card.id)   // 卡片已学完，A部分的临时状态存储同步清理
-}
-```
+学习界面「标熟」按钮：用户在 Unit 主界面/学习列表里主动操作，不依赖任何具体 Step 的判定，直接判学完，不经过 `wordLearningRouteTable`。本次只覆盖学习流程中的卡（`originQueue` 为 `.newCards` 或 `.fullRelearn` 的卡），复习流程的类似捷径本次不做。
+
+v4.2 变化：Step0 自测选「认识（即时）」不再是独立捷径——现在会触发检查页（见三、3.4 规则表 `.stepWithFollowUp`），跟「想到了」共用同一套 `stepWithFollowUp` 机制，只是检查页的 `allowEmptySelection` 参数不同。原来的 `handleRecognizedInstant` 已移除，「认识（即时）+ 检查页全部掌握」这条路径现在完全由规则表驱动（见三、3.4 的 `.checklistCompleted(false, false)` 那一行，`target: .finished(.easy)`），不需要引擎层的特殊捷径分支。
+
+**`handleMarkAsFamiliar(card:unit:)`**  
+做什么：把当前这张学习中的卡直接标熟并学完。  
+输入：`WordCard`、所属 `Unit`。  
+输出：无。  
+注意事项，按顺序：
+
+1. **入口守卫**：仅当 `card.originQueue` 为 `.newCards` 或 `.fullRelearn` 才继续；否则直接返回。
+2. **查进度**：用 `fetchLearningProgress(cardID:)` 取这份未完成的 `LearningProgress`。槽位来自 `LearningProgress.currentStepID`（架构代码文档四：它是这张卡当前排在哪个 Step 槽位的唯一权威来源，见该文档 v4.0 变更 2），而不是重新推导或假设固定入口——「标熟」可能发生在学习流程的任意一步。查不到视为数据不一致（能在学习列表里看到这张卡，理论上一定有未完成进度），交给上层按异常处理，这里不静默兜底，直接返回。
+3. **出槽**：`unit.learningSlots.removeCompletedCard(card.id, from: progress.currentStepID)`。
+4. **FSRS 初始化**：`FSRSEngine.initialize`，rating 为 `.easy`，`desiredRetention` 取 `unit.desiredRetention`（v4.6：`initialize` 新增该参数，架构代码文档二，从卡片所属 unit 读取）。
+5. **清队列标记**：`card.originQueue = nil`。
+6. **清临时状态**：`clearLearningProgress(cardID:)`，卡片已学完，A 部分的临时状态存储同步清理。
 
 ---
 
@@ -910,56 +798,34 @@ func handleMarkAsFamiliar(card: WordCard, unit: Unit) {
 
 1. ~~`handleMarkAsFamiliar` 里"先查出卡当前所在槽位"的具体实现~~ → 已给出（见五），通过 `fetchLearningProgress(cardID:)` 查出 `LearningProgress.currentStepID`，查不到视为数据不一致，交给上层按异常处理，不静默兜底。学完后同步调用 `clearLearningProgress(cardID:)` 清理临时状态存储。
 2. ~~`Step6` 复用 `TimedAssessment.recognizedInstant`/`.unknown` 表达二选一的语义借用~~ → 已改用 `ListeningSelfCheck`，`WordLearningOutcomeKey` 新增 `.listeningCheck(ListeningSelfCheck)` case，`outcomeKey(from:)` 相应新增 `.listeningCheckResult` 分支（见三、3.4、3.5）。**前置缺口已解决**：`ActionResult`（含 `.listeningCheckResult(ListeningSelfCheck)`）与 `ListeningSelfCheck` 本身已在架构代码文档 v4.4 五、5.4.1 正式定义，`ListeningSelfCheck` 的具体 case 是 `.recognized`/`.notRecognized`，与本文档 3.4/3.5 节已经在用的名字一致，不需要改动。
-3. **`definitionOptions`/`wordChoicesForListening`/`spellingChoices` 等选项生成函数**：本文档 `buildStepN()` 系列函数产出的是 Step **模板**（`options: []`/`correctAnswer: ""` 都是占位），这是有意为之——`Step` 本身按架构文档 v4.0 的瘦身原则只描述"这一步是什么形式的交互"，不携带具体某张卡的内容。真正的内容填充发生在渲染时，由 Factory 完成，约定如下：
+3. **`definitionOptions`/`wordChoicesForListening`/`spellingChoices` 等选项生成函数**：3.2 的 Step 静态形状产出的是 Step **模板**（`options` / `correctAnswer` 都是占位），这是有意为之——`Step` 本身按架构文档 v4.0 的瘦身原则只描述「这一步是什么形式的交互」，不携带具体某张卡的内容。真正的内容填充发生在渲染时，由 Factory 完成，约定如下：
 
-   - **调用时机**：`LearningStepFactory`（架构代码文档五）在把 `buildStepN()` 产出的模板 Step 交给 UI 层之前，用一个统一的 `fill(step:for:settings:) -> Step` 方法二次加工，把空的 `options`/`correctAnswer` 换成真实内容。`fill` 内部按 `step.id` 分发到各个具体的内容生成函数：
+   - **调用时机**：`LearningStepFactory`（架构代码文档五）在把模板 Step 交给 UI 层之前，用一个统一的 `fill(step:for:settings:) -> Step` 方法二次加工，把空的 `options`/`correctAnswer` 换成真实内容。`fill` 内部按 `step.id` 分发到各个具体的内容生成函数。签名如下（无函数体；正确项下标通过 `correctIndex` 回写）：
 
      ```swift
+     func fill(step: Step, for card: WordCard, settings: AppSettings) -> Step
      func definitionOptions(for card: WordCard, correctIndex: inout Int) -> [String]
-     // 用于 Step1/Step2/Step3，从 card.learningDefinitions() 取正确项，
-     // 干扰项从同 Unit 其他卡的 learningDefinitions() 里随机抽取
-
      func wordChoicesForListening(for card: WordCard, correctIndex: inout Int) -> [String]
-     // 用于 Step4，同上但取词形而非释义
-
      func spellingChoices(for card: WordCard, correctIndex: inout Int) -> [String]
-     // 用于 Step7a，正确拼写 + 若干形近词干扰项
      ```
 
-   - **统一依据**：所有生成函数都从 `card.learningDefinitions()`/`card.learningEnglishDefinitions()`（"学习内容"字段，架构代码文档 v4.0 变更 3）取正确项，不直接用 `card.definitions`（完整内容）——检查页勾选收窄内容后，出题范围要跟着收窄，这条约束通过"生成函数只认学习内容字段"来保证，而不是在每个生成函数内部各自判断"要不要收窄"。
-   - **复习确认页同理**：4.4 `buildReviewCheckPageStep` 走同一条 `fill` 路径，只是复习流程不涉及"学习内容"收窄（复习不会缩小出题范围），直接用完整内容。
+     - `definitionOptions`：用于 Step1/Step2/Step3，从 `card.learningDefinitions()` 取正确项，干扰项从同 Unit 其他卡的 `learningDefinitions()` 里随机抽取。
+     - `wordChoicesForListening`：用于 Step4，同上但取词形而非释义。
+     - `spellingChoices`：用于 Step7a，正确拼写 + 若干形近词干扰项。
+
+   - **统一依据**：所有生成函数都从 `card.learningDefinitions()`/`card.learningEnglishDefinitions()`（「学习内容」字段，架构代码文档 v4.0 变更 3）取正确项，不直接用 `card.definitions`（完整内容）——检查页勾选收窄内容后，出题范围要跟着收窄，这条约束通过「生成函数只认学习内容字段」来保证，而不是在每个生成函数内部各自判断「要不要收窄」。
+   - **复习确认页同理**：4.4 复习确认页走同一条 `fill` 路径，只是复习流程不涉及「学习内容」收窄（复习不会缩小出题范围），直接用完整内容。
 4. ~~`currentDefinitionTestMode()` 的具体实现~~ → 发现是架构层协议签名遗漏（`resolve` 没有 `settings` 参数），已在架构代码文档五、5.7 和本文档 3.5 节订正，`resolve` 直接从新增的 `settings` 参数读取 `definitionTestMode`，不再需要一个隐式读取全局单例的辅助函数。
-5. **规则表条目数量**：`wordLearningRouteTable` 目前约 30 行、`wordReviewRouteTable` 目前约 10 行，`assertNoRouteRuleConflicts`（架构代码文档五、5.2）应在开发阶段针对这两份表分别实际跑一次。具体建议：
+5. **规则表条目数量**：`wordLearningRouteTable` 目前约 30 行、`wordReviewRouteTable` 目前约 10 行，`assertNoRouteRuleConflicts`（架构代码文档五、5.2）应在开发阶段针对这两份表分别实际跑一次。建议在 DEBUG 构建下，App 启动路径（`AppDelegate`/`App`）调用一次冲突检查：分别对 `wordLearningRouteTable` 和 `wordReviewRouteTable` 跑 `assertNoRouteRuleConflicts`。架构代码文档五、5.2 已注明「App 启动时被调用一次」。这不是一次性检查——**每次改动任意一张规则表（新增/修改行）后都应该重新跑一次**，因为特异性冲突只有在具体的行组合下才会暴露，改表本身就是最容易引入冲突的时机。不需要额外写单元测试专门覆盖这件事：断言本身在 DEBUG 启动时就会 crash，比等 CI 跑测试更早发现问题，这与架构层「Release 不运行、避免运行时开销」的设计意图一致，无需额外产出物。
+6. **复习确认页 `checklistItems` 的具体来源**：4.4 复习确认页与学习流程检查页一样依赖勾选项列表，此前两处都留空。统一规格：学习检查页（三、3.2 `checkPageStepID`）与复习确认页（四、4.4）共用同一份勾选项。两处语义一致——都是「释义/拼写各自是否掌握」，**固定两项，不随卡片内容变化**，因此不需要 `card` 参数；`settings` 预留（如果未来某种测试模式下检查页需要隐藏其中一项，从 settings 判断，而不是在调用方各自处理）。
 
    ```swift
-   #if DEBUG
-   func runRouteTableConflictChecks() {
-       assertNoRouteRuleConflicts(wordLearningRouteTable)
-       assertNoRouteRuleConflicts(wordReviewRouteTable)
-   }
-   #endif
+   func checklistItems(settings: AppSettings) -> [ChecklistItem]
    ```
 
-   挂载点：在 `AppDelegate`/`App` 的启动路径里、DEBUG 构建下调用一次即可（架构代码文档五、5.2 已注明"App 启动时被调用一次"）。这不是一次性检查——**每次改动任意一张规则表（新增/修改行）后都应该重新跑一次**，因为特异性冲突只有在具体的行组合下才会暴露，改表本身就是最容易引入冲突的时机。不需要额外写单元测试专门覆盖这件事：断言本身在 DEBUG 启动时就会 crash，比等 CI 跑测试更早发现问题，这与架构层"Release 不运行、避免运行时开销"的设计意图一致，无需额外产出物。
-
-6. **复习确认页 `checklistItems` 的具体来源**：4.4 `buildReviewCheckPageStep` 与学习流程检查页一样依赖 `checklistItems(for:settings:)` 组装勾选项，此前两处都留空。给出统一实现：
-
-   ```swift
-   /// 供学习检查页（三、3.2 checkPageStepID）与复习确认页（四、4.4
-   /// buildReviewCheckPageStep）共用的勾选项生成函数。两处检查页语义一致——
-   /// 都是"释义/拼写各自是否掌握"，固定两项，不随卡片内容变化，因此这里
-   /// 不需要 card 参数，只需要 settings（预留：如果未来某种测试模式下
-   /// 检查页需要隐藏其中一项，从这里的 settings 判断，而不是在调用方各自处理）。
-   func checklistItems(settings: AppSettings) -> [ChecklistItem] {
-       [
-           ChecklistItem(id: "meaning", label: "释义"),
-           ChecklistItem(id: "spelling", label: "拼写")
-       ]
-   }
-   ```
-
-   `id` 取值固定为 `"meaning"`/`"spelling"`，与 3.5、3.5.1 节 `outcomeKey(from:)` 里 `uncheckedItems.contains { $0.id == "meaning" }` 的既有比对逻辑直接对应，不需要改动那两处。`label` 是展示文案，实际取值留给编码阶段按 UI 文案规范填（此处 "释义"/"拼写" 仅为占位示意）。
-
+   做什么：生成检查页/复习确认页的勾选项。  
+   输入：`AppSettings`（预留）。  
+   输出：两项，id 固定为 `"meaning"`（展示文案「释义」）与 `"spelling"`（展示文案「拼写」），与 3.5、3.5.1 节 `outcomeKey(from:)` 里按 `"meaning"` / `"spelling"` 比对 `uncheckedItems` 的既有逻辑直接对应，不需要改动那两处。`label` 是展示文案，实际取值留给编码阶段按 UI 文案规范填（此处「释义」/「拼写」仅为占位示意）。
 7. **`isCompletelyLearned(in:)` 在 UI 层的具体呈现**：架构设计文档十提到 Unit 首页可以展示"已学完：N 个"这类统计，具体呈现方式此前未展开。**已定，按以下方案**：
 
    - **入口位置**：主界面（`husk-word-learning-design-v2.md` 3.1 布局图）"今日已学"/"今日已复习"那一行统计的旁边，新增一项"已学完：N 个"，与现有两项并列展示，不新开一屏，保持"打开 Unit 就能看到关键数字"的一致性。
@@ -997,14 +863,3 @@ func handleMarkAsFamiliar(card: WordCard, unit: Unit) {
    `FinishedPayloadCodableBox` 是因为 `RouteTarget<FinishedPayload>` 的 `FinishedPayload` 是范型、不天然 `Codable`，需要一个装箱类型把 `FSRSRating` 这类具体值包装成可持久化的形式——这属于编码阶段的样板代码，不是设计决策，此处不展开。
 
    持久化时机：`RouteTarget`/`ReviewRouteTarget` 查表得到结果、且 `signal == .detailPage` 时，把这次查表结果转换成 `PendingDetailPageResolution` 立即写盘（而不是等用户在详情页停留期间才写），App 恢复时优先检查是否存在未清理的 `PendingDetailPageResolution`，存在则直接跳回详情页确认环节，不重新走一次判定。
-
-   这样"自定义处理本质是代码逻辑、不能存数据库"这个顾虑不成立——因为审视下来，失败处理实际上从来就只是"regressed 到某个 Step"或"转入完整重学"这两种架构层已有的结构化结果，不存在真正需要存一段闭包/代码的场景。如果编码阶段发现某个具体 CardType 确实需要一种无法用这两个 case 表达的处理方式，再回来扩展这个 enum，而不是一开始就往"支持任意代码逻辑"的方向设计。
-
-**v4.0 遗留、已在 v4.1 解决的三个问题**（记录于此，避免以后误查旧版本文档产生困惑）：
-- ~~Step0 复合交互的具体承载方式~~ → 改用架构层的 `stepWithFollowUp` 机制，Step0 恢复为普通 `.timedSelfAssessment`，检查页是规则表触发的追加交互（见三、3.2、3.4）
-- ~~`WordCardStepFactory.buildSequence(for:)` 如何拿到 `AppSettings`~~ → 架构层协议已补上 `settings` 参数（见三、3.6）
-- ~~`checklistCompleted` 这个 outcome case 的实际产生方式~~ → 明确为 `WordCardLearningRouteTable.outcomeKey(from:)` 的职责，已给出具体实现（见三、3.5）
-
-**v4.1 遗留、已在 v4.2 解决的两个问题**：
-- ~~"认识（即时）"直接学完，跳过检查页~~ → 产品逻辑变更：现在"认识"也会触发检查页，只是允许空选直接通过（见三、3.2、3.4，五）
-- ~~复习流程"认识（即时）"没有二次确认机制，可能造成手速快误报~~ → 新增复习确认页，`ReviewRouteTarget` 补上 `stepWithFollowUp`（见架构代码文档 v4.2 及本文档四、4.3/4.4）
