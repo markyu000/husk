@@ -63,16 +63,16 @@ Label 按 `/` 前缀分组，同一前缀组内统一一个颜色，用于区分
 | `type/test`   | `#D93F0B` | 测试     |
 | `type/appear` | `#D93F0B` | UI       |
 
-#### scope/*：影响范围（对应架构中的模块划分）
+#### scope/*：影响范围（与 `Husk/` 下模块目录一一对应，见《Husk文件夹结构》）
 
-| Label 名称                | 颜色      | 作用                                   |
-| :------------------------ | :-------- | :------------------------------------- |
-| `scope/core`               | `#0E8A16` | 跨 CardType 的核心基础设施（Card/Unit/FSRS等） |
-| `scope/route-rule-table`   | `#0E8A16` | 规则表机制（RouteRuleMatching/规则数据等）      |
-| `scope/learning-engine`    | `#0E8A16` | 学习引擎                                |
-| `scope/reviewing-engine`   | `#0E8A16` | 复习引擎                                |
-| `scope/word-card`          | `#0E8A16` | 单词型（CardType.word）具体实现          |
-| `scope/ui`                 | `#0E8A16` | 界面与交互                              |
+| Label 名称                | 目录 | 颜色      | 作用                                   |
+| :------------------------ | :--- | :-------- | :------------------------------------- |
+| `scope/core`               | `Core/` | `#0E8A16` | 跨 CardType 的核心基础设施（Card/Unit/FSRS、两引擎共用的 Step 等） |
+| `scope/route-rule-table`   | `RouteRuleTable/` | `#0E8A16` | 规则表机制（RouteRuleMatching/规则数据等）      |
+| `scope/learning-engine`    | `LearningEngine/` | `#0E8A16` | 学习引擎                                |
+| `scope/reviewing-engine`    | `ReviewingEngine/` | `#0E8A16` | 复习引擎                                |
+| `scope/word-card`          | `WordCard/` | `#0E8A16` | 单词型（CardType.word）具体实现          |
+| `scope/ui`                 | `UI/` | `#0E8A16` | 界面与交互                              |
 
 ## 4. Issue
 
