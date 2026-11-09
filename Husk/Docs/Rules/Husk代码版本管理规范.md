@@ -29,7 +29,7 @@
 
 ### 2.1 Commit标题及内容
 
-标题使用`<类型>:<简短标题>`格式
+标题使用`<类型>:<简短标题>`格式，标题使用英文（内容/正文可以用中文）
 
 ### 2.2 类型
 
@@ -46,7 +46,7 @@
 
 ## 3. PR
 
-所有PR依据模版创建，设置assignees、label、development
+所有PR依据模版创建，标题使用英文（同Commit标题格式，内容/正文可以用中文），设置assignees、label、development、milestone（尽量与对应issue的milestone保持一致）
 
 ### 3.1 Label
 
